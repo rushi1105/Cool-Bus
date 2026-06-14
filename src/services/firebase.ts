@@ -1,9 +1,53 @@
 /**
- * Firebase Service — Placeholder / Mock
+ * Firebase Service — Real Firebase JS SDK + Mock Data
  *
- * Provides mock data and simulated operations for all Firestore
- * collections until real Firebase is wired up.
+ * Phase 1: Real Firebase init, Auth, and Firestore helpers.
+ * Mock data preserved for screens not yet migrated (maps, trips, etc.).
  */
+
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  addDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  serverTimestamp,
+  Timestamp,
+} from 'firebase/firestore';
+import {
+  initializeAuth,
+  // @ts-ignore - this is available at runtime but TS types in this version sometimes miss it
+  getReactNativePersistence,
+  signInWithPhoneNumber,
+  PhoneAuthProvider,
+  signOut,
+  onAuthStateChanged,
+  type ConfirmationResult,
+  type Auth,
+  type User as FirebaseUser,
+} from 'firebase/auth';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import Config from '../constants/config';
+
+// ─── Firebase Init ───────────────────────────────────────────────────
+
+const firebaseConfig = Config.firebase;
+console.log('Firebase Config at runtime:', firebaseConfig);
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+export const db = getFirestore(app);
+
+export const auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+});
+
+export { onAuthStateChanged, signOut };
+export type { ConfirmationResult, FirebaseUser };
 
 // ─── Types ───────────────────────────────────────────────────────────
 export interface User {
@@ -13,7 +57,11 @@ export interface User {
   phone: string;
   email: string;
   operatorId?: string;
+  operatorCode?: string;
+  busNumber?: string;
+  shift?: string;
   avatarUrl?: string;
+  createdAt?: any;
 }
 
 export interface Bus {
@@ -56,6 +104,7 @@ export interface Fee {
   month: string; // e.g. "2026-06"
   total: number;
   trialUsed: boolean;
+  trialExpiry?: Date;
   paidAt?: Date;
 }
 
@@ -65,6 +114,7 @@ export interface Coupon {
   operatorId: string;
   isUsed: boolean;
   usedBy?: string;
+  usedByPhones?: string[];
   createdAt: Date;
   expiresAt: Date;
 }
@@ -77,7 +127,227 @@ export interface Operator {
   driverIds: string[];
 }
 
-// ─── Mock Data ───────────────────────────────────────────────────────
+// ─── Firestore Helpers (Real) ────────────────────────────────────────
+
+/**
+ * Get a user document from /users/{uid}
+ */
+export async function getUserByUid(uid: string): Promise<User | null> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (!snap.exists()) return null;
+    return { id: snap.id, ...snap.data() } as User;
+  } catch (err) {
+    console.error('[Firebase] getUserByUid error:', err);
+    return null;
+  }
+}
+
+/**
+ * Create or overwrite a user document at /users/{uid}
+ */
+export async function createUserDoc(
+  uid: string,
+  data: Omit<User, 'id'>,
+): Promise<void> {
+  try {
+    await setDoc(doc(db, 'users', uid), {
+      ...data,
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error('[Firebase] createUserDoc error:', err);
+    throw err;
+  }
+}
+
+/**
+ * Add a student document to /students (auto-ID)
+ */
+export async function addStudentDoc(
+  data: Omit<Student, 'id'>,
+): Promise<string> {
+  try {
+    const ref = await addDoc(collection(db, 'students'), {
+      ...data,
+      createdAt: serverTimestamp(),
+    });
+    return ref.id;
+  } catch (err) {
+    console.error('[Firebase] addStudentDoc error:', err);
+    throw err;
+  }
+}
+
+/**
+ * Create a fee record in /fees (auto-ID)
+ */
+export async function createFeeDoc(
+  data: Omit<Fee, 'id'>,
+): Promise<string> {
+  try {
+    const ref = await addDoc(collection(db, 'fees'), {
+      ...data,
+      createdAt: serverTimestamp(),
+    });
+    return ref.id;
+  } catch (err) {
+    console.error('[Firebase] createFeeDoc error:', err);
+    throw err;
+  }
+}
+
+/**
+ * Count how many students a parent has in /students
+ */
+export async function getStudentCountByParent(
+  parentId: string,
+): Promise<number> {
+  try {
+    const q = query(
+      collection(db, 'students'),
+      where('parentId', '==', parentId),
+    );
+    const snap = await getDocs(q);
+    return snap.size;
+  } catch (err) {
+    console.error('[Firebase] getStudentCountByParent error:', err);
+    return 0;
+  }
+}
+
+/**
+ * Fetch all operators from /operators collection
+ */
+export async function fetchOperators(): Promise<Operator[]> {
+  try {
+    const snap = await getDocs(collection(db, 'operators'));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Operator));
+  } catch (err) {
+    console.error('[Firebase] fetchOperators error:', err);
+    return [];
+  }
+}
+
+/**
+ * Find an operator by their code
+ */
+export async function getOperatorByCode(
+  code: string,
+): Promise<Operator | null> {
+  try {
+    const q = query(
+      collection(db, 'operators'),
+      where('code', '==', code.toUpperCase()),
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) return null;
+    const d = snap.docs[0];
+    return { id: d.id, ...d.data() } as Operator;
+  } catch (err) {
+    console.error('[Firebase] getOperatorByCode error:', err);
+    return null;
+  }
+}
+
+/**
+ * Register a new driver: create user doc in Firestore
+ */
+export async function registerDriver(
+  uid: string,
+  data: {
+    name: string;
+    phone: string;
+    operatorId: string;
+    busNumber: string;
+    shift: string;
+  },
+): Promise<void> {
+  await createUserDoc(uid, {
+    name: data.name,
+    phone: data.phone,
+    email: '',
+    role: 'driver',
+    operatorId: data.operatorId,
+    busNumber: data.busNumber,
+    shift: data.shift,
+  });
+}
+
+/**
+ * Register a new parent: create user doc, student doc, and fee doc
+ */
+export async function registerParent(
+  uid: string,
+  data: {
+    parentName: string;
+    phone: string;
+    email: string;
+    childName: string;
+    grade: string;
+    gender: string;
+    operatorCode: string;
+  },
+): Promise<void> {
+  // 1. Resolve operator by code
+  const operator = await getOperatorByCode(data.operatorCode);
+  const operatorId = operator?.id ?? '';
+
+  // 2. Create user doc
+  await createUserDoc(uid, {
+    name: data.parentName,
+    phone: data.phone,
+    email: data.email,
+    role: 'parent',
+    operatorCode: data.operatorCode,
+  });
+
+  // 3. Check existing children count BEFORE adding the new one
+  const existingCount = await getStudentCountByParent(uid);
+
+  // 4. Add student doc
+  const studentId = await addStudentDoc({
+    name: data.childName,
+    parentId: uid,
+    busId: '',  // will be assigned by operator later
+    operatorId,
+    grade: data.grade,
+    gender: data.gender as 'Male' | 'Female' | 'Other',
+    stopLocation: { latitude: 0, longitude: 0, label: '' },
+  });
+
+  // 5. Create fee record
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  if (existingCount === 0) {
+    // First child → free trial
+    const trialExpiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    await createFeeDoc({
+      parentId: uid,
+      operatorId,
+      studentId,
+      status: 'TRIAL',
+      month: currentMonth,
+      total: 0,
+      trialUsed: true,
+      trialExpiry,
+    });
+  } else {
+    // Additional child → unpaid
+    await createFeeDoc({
+      parentId: uid,
+      operatorId,
+      studentId,
+      status: 'UNPAID',
+      month: currentMonth,
+      total: 2500,
+      trialUsed: true,
+    });
+  }
+}
+
+// ─── Mock Data (preserved for screens not yet migrated) ──────────────
 
 const BANGALORE_CENTER = { latitude: 12.9716, longitude: 77.5946 };
 
@@ -251,6 +521,7 @@ export const mockCoupons: Coupon[] = [
     operatorId: 'op-1',
     isUsed: true,
     usedBy: 'par-1',
+    usedByPhones: ['+919876543210'],
     createdAt: new Date('2026-01-15'),
     expiresAt: new Date('2026-07-15'),
   },
@@ -259,6 +530,7 @@ export const mockCoupons: Coupon[] = [
     code: 'SAFERIDE-FREE-1002',
     operatorId: 'op-1',
     isUsed: false,
+    usedByPhones: [],
     createdAt: new Date('2026-03-10'),
     expiresAt: new Date('2026-09-10'),
   },
@@ -268,6 +540,7 @@ export const mockCoupons: Coupon[] = [
     operatorId: 'op-2',
     isUsed: true,
     usedBy: 'par-3',
+    usedByPhones: ['+918888888888'],
     createdAt: new Date('2026-02-20'),
     expiresAt: new Date('2026-08-20'),
   },
@@ -276,6 +549,7 @@ export const mockCoupons: Coupon[] = [
     code: 'SAFERIDE-FREE-1003',
     operatorId: 'op-1',
     isUsed: false,
+    usedByPhones: [],
     createdAt: new Date('2026-06-01'),
     expiresAt: new Date('2026-12-01'),
   },
@@ -310,10 +584,10 @@ export const mockTrips: Trip[] = [
   },
 ];
 
-// ─── Mock Service Methods ────────────────────────────────────────────
+// ─── Mock Service Methods (preserved for un-migrated screens) ────────
 
 export const firebaseService = {
-  // Auth
+  // Auth — these are now no-ops since real auth is in screens directly
   sendOTP: async (_phone: string): Promise<string> => {
     await delay(1000);
     return 'mock-verification-id';
@@ -400,10 +674,40 @@ export const firebaseService = {
     return results;
   },
 
-  addStudent: async (student: Omit<Student, 'id'>): Promise<Student> => {
+  addStudent: async (student: Omit<Student, 'id'>, hasCoupon: boolean = false): Promise<Student> => {
     await delay(800);
     const newStudent = { id: `stu-${Date.now()}`, ...student };
     mockStudents.push(newStudent);
+    
+    // Check if this is the first child for this parent
+    const existingStudents = mockStudents.filter(s => s.parentId === student.parentId);
+    const isFirstChild = existingStudents.length === 1; // It includes the newly added one
+    
+    // Create fee record based on first child logic or coupon
+    if (isFirstChild || hasCoupon) {
+      mockFees.push({
+        id: `fee-${Date.now()}`,
+        parentId: student.parentId,
+        operatorId: student.operatorId,
+        studentId: newStudent.id,
+        status: 'TRIAL',
+        month: '2026-06',
+        total: 0,
+        trialUsed: false,
+      });
+    } else {
+      mockFees.push({
+        id: `fee-${Date.now()}`,
+        parentId: student.parentId,
+        operatorId: student.operatorId,
+        studentId: newStudent.id,
+        status: 'UNPAID',
+        month: '2026-06',
+        total: 2500,
+        trialUsed: true,
+      });
+    }
+    
     return newStudent;
   },
 
@@ -435,16 +739,22 @@ export const firebaseService = {
 
   validateCoupon: async (code: string): Promise<Coupon | null> => {
     await delay(600);
-    const coupon = mockCoupons.find((c) => c.code === code && !c.isUsed);
+    const coupon = mockCoupons.find((c) => c.code === code);
     return coupon ?? null;
   },
 
-  useCoupon: async (couponId: string, parentId: string): Promise<void> => {
+  useCoupon: async (couponId: string, parentId: string, phone?: string): Promise<void> => {
     await delay(500);
     const coupon = mockCoupons.find((c) => c.id === couponId);
     if (coupon) {
       coupon.isUsed = true;
       coupon.usedBy = parentId;
+      if (phone) {
+        coupon.usedByPhones = coupon.usedByPhones || [];
+        if (!coupon.usedByPhones.includes(phone)) {
+          coupon.usedByPhones.push(phone);
+        }
+      }
     }
   },
 

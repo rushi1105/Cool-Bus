@@ -24,7 +24,7 @@ export const couponService = {
   /**
    * Validate and check a coupon code
    */
-  validate: async (code: string): Promise<CouponValidation> => {
+  validate: async (code: string, phone?: string): Promise<CouponValidation> => {
     const trimmed = code.toUpperCase().trim();
 
     if (!trimmed) {
@@ -42,7 +42,17 @@ export const couponService = {
     const coupon = await firebaseService.validateCoupon(trimmed);
 
     if (!coupon) {
-      return { valid: false, coupon: null, message: 'Coupon not found or already used' };
+      return { valid: false, coupon: null, message: 'Coupon not found' };
+    }
+
+    if (coupon.isUsed && (!phone || !coupon.usedByPhones?.includes(phone))) {
+       // If it's used but this phone isn't one of the users, then for this mock, let's say anyone can use a coupon multiple times, but NOT the same phone twice.
+       // Wait, if "rejects if already used by same phone number", it means:
+       // if phone is provided and usedByPhones includes it -> reject
+    }
+    
+    if (phone && coupon.usedByPhones?.includes(phone)) {
+      return { valid: false, coupon: null, message: 'This coupon was already used by this phone number' };
     }
 
     if (new Date() > coupon.expiresAt) {
@@ -55,9 +65,9 @@ export const couponService = {
   /**
    * Redeem a coupon
    */
-  redeem: async (couponId: string, parentId: string): Promise<boolean> => {
+  redeem: async (couponId: string, parentId: string, phone?: string): Promise<boolean> => {
     try {
-      await firebaseService.useCoupon(couponId, parentId);
+      await firebaseService.useCoupon(couponId, parentId, phone);
       return true;
     } catch {
       return false;

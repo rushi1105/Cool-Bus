@@ -14,8 +14,8 @@ interface UseCouponReturn {
   validation: CouponValidation | null;
   isValidating: boolean;
   isRedeemed: boolean;
-  validateCode: () => Promise<CouponValidation>;
-  redeemCode: (parentId: string) => Promise<boolean>;
+  validateCode: (phone?: string) => Promise<CouponValidation>;
+  redeemCode: (parentId: string, phone?: string) => Promise<boolean>;
   reset: () => void;
   // Operator features
   coupons: Coupon[];
@@ -32,10 +32,10 @@ export function useCoupon(): UseCouponReturn {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [isLoadingCoupons, setIsLoadingCoupons] = useState(false);
 
-  const validateCode = useCallback(async (): Promise<CouponValidation> => {
+  const validateCode = useCallback(async (phone?: string): Promise<CouponValidation> => {
     setIsValidating(true);
     try {
-      const result = await couponService.validate(code);
+      const result = await couponService.validate(code, phone);
       setValidation(result);
       return result;
     } finally {
@@ -44,9 +44,9 @@ export function useCoupon(): UseCouponReturn {
   }, [code]);
 
   const redeemCode = useCallback(
-    async (parentId: string): Promise<boolean> => {
+    async (parentId: string, phone?: string): Promise<boolean> => {
       if (!validation?.valid || !validation.coupon) return false;
-      const success = await couponService.redeem(validation.coupon.id, parentId);
+      const success = await couponService.redeem(validation.coupon.id, parentId, phone);
       if (success) setIsRedeemed(true);
       return success;
     },

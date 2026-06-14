@@ -2,6 +2,11 @@
  * Location Service — Mock
  *
  * Simulates expo-location for tracking bus position.
+ * Real implementation will use:
+ * - accuracy: LocationAccuracy.BestForNavigation
+ * - distanceInterval: 10
+ * - timeInterval: 5000
+ * - background location enabled with significant-changes fallback
  */
 
 export interface LocationCoords {

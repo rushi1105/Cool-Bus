@@ -36,8 +36,8 @@ export const CouponInput: React.FC<CouponInputProps> = ({
         <TextInput
           style={[
             styles.input,
-            validationMessage && isValid && styles.inputValid,
-            validationMessage && !isValid && styles.inputInvalid,
+            validationMessage && isValid ? styles.inputValid : undefined,
+            validationMessage && !isValid ? styles.inputInvalid : undefined,
           ]}
           value={value}
           onChangeText={(text) => onChangeText(text.toUpperCase())}

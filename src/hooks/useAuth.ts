@@ -1,124 +1,82 @@
 /**
  * useAuth Hook
  *
- * Manages authentication state, role-based access, and mock login/logout.
+ * Listens to Firebase onAuthStateChanged and reads the user's
+ * profile + role from Firestore /users/{uid}.
+ *
+ * Returns { user, profile, role, loading, logout }
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { User, firebaseService, mockOperators } from '../services/firebase';
+import { useState, useEffect, useCallback } from 'react';
+import {
+  auth,
+  onAuthStateChanged,
+  signOut,
+  getUserByUid,
+  type FirebaseUser,
+  type User as UserProfile,
+} from '../services/firebase';
 import type { UserRole } from '../constants/config';
 
-interface AuthState {
-  user: User | null;
+interface UseAuthReturn {
+  /** Firebase Auth user object (null if signed out) */
+  user: FirebaseUser | null;
+  /** Firestore /users/{uid} profile document */
+  profile: UserProfile | null;
+  /** User's role from Firestore */
   role: UserRole | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  operatorId: string | null;
+  /** True while initial auth state is being resolved */
+  loading: boolean;
+  /** Sign the user out of Firebase */
+  logout: () => Promise<void>;
 }
-
-interface UseAuthReturn extends AuthState {
-  login: (role: UserRole, userData?: Partial<User>) => void;
-  logout: () => void;
-  sendOTP: (phone: string) => Promise<string>;
-  verifyOTP: (verificationId: string, code: string) => Promise<boolean>;
-  setRole: (role: UserRole) => void;
-}
-
-// ─── Mock Users Per Role ─────────────────────────────────────────────
-
-const mockUsers: Record<UserRole, User> = {
-  driver: {
-    id: 'drv-1',
-    role: 'driver',
-    name: 'Rajesh Kumar',
-    phone: '+919876543210',
-    email: 'rajesh@bustrack.com',
-    operatorId: 'op-1',
-  },
-  parent: {
-    id: 'par-1',
-    role: 'parent',
-    name: 'Sneha Sharma',
-    phone: '+919876543211',
-    email: 'sneha@gmail.com',
-    operatorId: 'op-1',
-  },
-  operator: {
-    id: 'op-1',
-    role: 'operator',
-    name: 'SafeRide Transport',
-    phone: '+919876543212',
-    email: 'admin@saferide.com',
-    operatorId: 'op-1',
-  },
-};
 
 export function useAuth(): UseAuthReturn {
-  const [state, setState] = useState<AuthState>({
-    user: null,
-    role: null,
-    isAuthenticated: false,
-    isLoading: true,
-    operatorId: null,
-  });
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Simulate initial auth check
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setState((prev) => ({ ...prev, isLoading: false }));
-    }, 500);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const login = useCallback((role: UserRole, userData?: Partial<User>) => {
-    const user = { ...mockUsers[role], ...userData };
-    setState({
-      user,
-      role,
-      isAuthenticated: true,
-      isLoading: false,
-      operatorId: user.operatorId ?? null,
-    });
-  }, []);
-
-  const logout = useCallback(() => {
-    setState({
-      user: null,
-      role: null,
-      isAuthenticated: false,
-      isLoading: false,
-      operatorId: null,
-    });
-  }, []);
-
-  const sendOTP = useCallback(async (phone: string): Promise<string> => {
-    return firebaseService.sendOTP(phone);
-  }, []);
-
-  const verifyOTP = useCallback(
-    async (verificationId: string, code: string): Promise<boolean> => {
-      try {
-        await firebaseService.verifyOTP(verificationId, code);
-        return true;
-      } catch {
-        return false;
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        try {
+          const userDoc = await getUserByUid(firebaseUser.uid);
+          if (userDoc) {
+            setProfile(userDoc);
+            setRole(userDoc.role as UserRole);
+          } else {
+            // User is authenticated but has no Firestore profile yet
+            // (mid-registration — profile will be created after OTP verify)
+            setProfile(null);
+            setRole(null);
+          }
+        } catch (err) {
+          console.error('[useAuth] Error fetching profile:', err);
+          setProfile(null);
+          setRole(null);
+        }
+      } else {
+        setUser(null);
+        setProfile(null);
+        setRole(null);
       }
-    },
-    [],
-  );
+      setLoading(false);
+    });
 
-  const setRole = useCallback((role: UserRole) => {
-    setState((prev) => ({ ...prev, role }));
+    return () => unsubscribe();
   }, []);
 
-  return {
-    ...state,
-    login,
-    logout,
-    sendOTP,
-    verifyOTP,
-    setRole,
-  };
+  const logout = useCallback(async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error('[useAuth] Logout error:', err);
+    }
+  }, []);
+
+  return { user, profile, role, loading, logout };
 }
 
 export default useAuth;
