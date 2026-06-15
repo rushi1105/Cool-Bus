@@ -8,11 +8,12 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
 import {
   auth,
+  db,
   onAuthStateChanged,
   signOut,
-  getUserByUid,
   type FirebaseUser,
   type User as UserProfile,
 } from '../services/firebase';
@@ -38,34 +39,54 @@ export function useAuth(): UseAuthReturn {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubscribeSnapshot: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+      // Clean up previous Firestore snapshot listener if any
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
+        unsubscribeSnapshot = null;
+      }
+
       if (firebaseUser) {
         setUser(firebaseUser);
-        try {
-          const userDoc = await getUserByUid(firebaseUser.uid);
-          if (userDoc) {
-            setProfile(userDoc);
-            setRole(userDoc.role as UserRole);
-          } else {
-            // User is authenticated but has no Firestore profile yet
-            // (mid-registration — profile will be created after OTP verify)
+        
+        // Subscribe to real-time changes of user profile
+        unsubscribeSnapshot = onSnapshot(
+          doc(db, 'users', firebaseUser.uid),
+          (snapshot) => {
+            if (snapshot.exists()) {
+              const userDoc = { id: snapshot.id, ...snapshot.data() } as UserProfile;
+              setProfile(userDoc);
+              setRole(userDoc.role as UserRole);
+            } else {
+              // Profile document does not exist yet (mid-registration)
+              setProfile(null);
+              setRole(null);
+            }
+            setLoading(false);
+          },
+          (err) => {
+            console.error('[useAuth] Firestore onSnapshot error:', err);
             setProfile(null);
             setRole(null);
+            setLoading(false);
           }
-        } catch (err) {
-          console.error('[useAuth] Error fetching profile:', err);
-          setProfile(null);
-          setRole(null);
-        }
+        );
       } else {
         setUser(null);
         setProfile(null);
         setRole(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
+      }
+    };
   }, []);
 
   const logout = useCallback(async () => {

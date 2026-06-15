@@ -1,270 +1,552 @@
 /**
- * ParentHome Screen
+ * ParentHome Screen — Phase 2
  *
- * Shows live tracking card, quick stats, notification feed.
- * Paywall banner if fees are unpaid.
+ * Ola-style full-screen map with floating overlays.
+ * Shows real-time bus tracking, ETA calculation, child selector,
+ * bottom sheet with driver details, and paywall if fees are unpaid.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
-  TouchableOpacity,
   StatusBar,
+  TouchableOpacity,
+  Linking,
+  ActivityIndicator,
+  Dimensions,
+  Platform,
+  Alert,
+  ScrollView,
   Animated,
-  RefreshControl,
+  PanResponder,
 } from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { db, type Student, type User } from '../../services/firebase';
+import { useAuth } from '../../hooks/useAuth';
+import { useFeeStatus } from '../../hooks/useFeeStatus';
+import { useBusLocation } from '../../hooks/useBusLocation';
+import { useNotifications } from '../../hooks/useNotifications';
 import Colors from '../../constants/colors';
 import FeeStatusBanner from '../../components/FeeStatusBanner';
-import NotificationCard from '../../components/NotificationCard';
-import { useFeeStatus } from '../../hooks/useFeeStatus';
-import { mockStudents, mockBuses } from '../../services/firebase';
-import notificationService, { AppNotification } from '../../services/notifications';
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface ParentHomeProps {
   navigation: any;
 }
 
 export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
-  const [selectedChild, setSelectedChild] = useState(0);
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [refreshing, setRefreshing] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const { user, profile } = useAuth();
+  const mapRef = useRef<MapView>(null);
+  
+  const [isExpanded, setIsExpanded] = useState(false);
+  const isExpandedRef = useRef(false);
+  const sheetTranslateY = useRef(new Animated.Value(180)).current;
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-
-  const children = mockStudents.filter((s) => s.parentId === 'par-1');
-  const child = children[selectedChild];
-  const bus = mockBuses.find((b) => b.id === child?.busId);
-  const feeStatus = useFeeStatus('par-1', child?.id);
-
-  useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 500,
+  const expandSheet = useCallback(() => {
+    isExpandedRef.current = true;
+    setIsExpanded(true);
+    Animated.spring(sheetTranslateY, {
+      toValue: 0,
       useNativeDriver: true,
+      tension: 50,
+      friction: 8,
     }).start();
+  }, [sheetTranslateY]);
 
-    loadNotifications();
-    setTimeout(() => setIsLoading(false), 800);
-  }, []);
+  const collapseSheet = useCallback(() => {
+    isExpandedRef.current = false;
+    setIsExpanded(false);
+    Animated.spring(sheetTranslateY, {
+      toValue: 180,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 8,
+    }).start();
+  }, [sheetTranslateY]);
 
-  const loadNotifications = async () => {
-    const notifs = await notificationService.getAll();
-    setNotifications(notifs.slice(0, 5));
+  const toggleSheet = useCallback(() => {
+    if (isExpandedRef.current) {
+      collapseSheet();
+    } else {
+      expandSheet();
+    }
+  }, [expandSheet, collapseSheet]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        return Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        let nextVal = (isExpandedRef.current ? 0 : 180) + gestureState.dy;
+        nextVal = Math.max(0, Math.min(nextVal, 180));
+        sheetTranslateY.setValue(nextVal);
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (isExpandedRef.current) {
+          if (gestureState.dy > 50) {
+            collapseSheet();
+          } else {
+            expandSheet();
+          }
+        } else {
+          if (gestureState.dy < -50) {
+            expandSheet();
+          } else {
+            collapseSheet();
+          }
+        }
+      },
+    })
+  ).current;
+
+  // Firestore students data state
+  const [students, setStudents] = useState<Student[]>([]);
+  const [loadingStudents, setLoadingStudents] = useState(true);
+  const [selectedChildIndex, setSelectedChildIndex] = useState(0);
+
+  // Driver details state
+  const [driverInfo, setDriverInfo] = useState<User | null>(null);
+  const [loadingDriver, setLoadingDriver] = useState(false);
+
+  // Map initial region
+  const [initialRegion, setInitialRegion] = useState({
+    latitude: 12.9716,
+    longitude: 77.5946,
+    latitudeDelta: 0.02,
+    longitudeDelta: 0.02,
+  });
+
+  // ─── Step 1: Real-time listen to Parent's children from Firestore ────
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    setLoadingStudents(true);
+    const q = query(
+      collection(db, 'students'),
+      where('parentId', '==', user.uid)
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const list = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as Student[];
+        setStudents(list);
+        setLoadingStudents(false);
+
+        // Set initial region if child exists
+        if (list.length > 0 && list[0].stopLocation) {
+          setInitialRegion({
+            latitude: list[0].stopLocation.latitude,
+            longitude: list[0].stopLocation.longitude,
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.015,
+          });
+        }
+      },
+      (err) => {
+        console.error('[ParentHome] Students listener error:', err);
+        setLoadingStudents(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [user?.uid]);
+
+  // Active child and derived state
+  const child = students[selectedChildIndex] || null;
+
+  // Fee Status Hook
+  const feeStatus = useFeeStatus(user?.uid || null, child?.id || null);
+  const hasAccess = feeStatus.hasAccess;
+
+  // Real-time Bus Location Hook (only fetch if has access and busId exists)
+  const busLocation = useBusLocation(
+    hasAccess ? (child?.busId || null) : null,
+    child?.stopLocation || null
+  );
+
+  // Notifications Hook
+  const { notifications, unreadCount } = useNotifications(user?.uid || null);
+
+  // ─── Step 2: Fetch Driver Details for active child's bus ──────────
+  useEffect(() => {
+    if (!busLocation.bus?.driverId) {
+      setDriverInfo(null);
+      return;
+    }
+
+    setLoadingDriver(true);
+    const driverDocRef = doc(db, 'users', busLocation.bus.driverId);
+    getDoc(driverDocRef)
+      .then((snap) => {
+        if (snap.exists()) {
+          setDriverInfo({ id: snap.id, ...snap.data() } as User);
+        } else {
+          setDriverInfo(null);
+        }
+      })
+      .catch((err) => {
+        console.error('[ParentHome] Fetch driver error:', err);
+      })
+      .finally(() => {
+        setLoadingDriver(false);
+      });
+  }, [busLocation.bus?.driverId]);
+
+  // ─── Step 3: Fit Map bounds to show both Bus and Stop ─────────────
+  useEffect(() => {
+    if (!child || !mapRef.current) return;
+
+    if (busLocation.bus?.isActive && busLocation.bus.currentLocation) {
+      mapRef.current.fitToCoordinates(
+        [
+          {
+            latitude: busLocation.bus.currentLocation.latitude,
+            longitude: busLocation.bus.currentLocation.longitude,
+          },
+          {
+            latitude: child.stopLocation.latitude,
+            longitude: child.stopLocation.longitude,
+          },
+        ],
+        {
+          edgePadding: {
+            top: Platform.OS === 'ios' ? 180 : 150,
+            right: 60,
+            bottom: Platform.OS === 'ios' ? 320 : 280,
+            left: 60,
+          },
+          animated: true,
+        }
+      );
+    } else {
+      // Just center on child's stop
+      mapRef.current.animateToRegion(
+        {
+          latitude: child.stopLocation.latitude,
+          longitude: child.stopLocation.longitude,
+          latitudeDelta: 0.015,
+          longitudeDelta: 0.015,
+        },
+        1000
+      );
+    }
+  }, [child?.id, busLocation.bus?.isActive, busLocation.bus?.currentLocation]);
+
+  // Contact Driver Link
+  const handleCallDriver = () => {
+    if (!driverInfo?.phone) {
+      Alert.alert('Contact Unavailable', 'Driver phone number is not available.');
+      return;
+    }
+    Linking.openURL(`tel:${driverInfo.phone}`);
   };
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await loadNotifications();
-    setTimeout(() => setRefreshing(false), 800);
+  // Switch Child handler
+  const handleSelectChild = (index: number) => {
+    setSelectedChildIndex(index);
+    // Reset bottom sheet to collapsed state
+    collapseSheet();
   };
 
-  const currentFeeStatus = feeStatus.currentFee?.status ?? (feeStatus.trialInfo.isOnTrial ? 'TRIAL' : 'UNPAID');
-  const hasAccess = currentFeeStatus === 'PAID' || currentFeeStatus === 'TRIAL';
-
-  const getTrialExpiryDate = () => {
-    if (!feeStatus.trialInfo.isOnTrial) return '';
-    const date = new Date();
-    date.setDate(date.getDate() + feeStatus.trialInfo.trialDaysRemaining);
-    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  };
-
-  if (isLoading) {
+  if (loadingStudents || feeStatus.isLoading) {
     return (
-      <View style={[styles.container, styles.center]}>
+      <View style={styles.loadingContainer}>
         <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
-        <Text style={styles.loadingEmoji}>👨‍👩‍👧</Text>
-        <Text style={styles.loadingText}>Loading dashboard...</Text>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Syncing tracker details...</Text>
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
+  // ─── Paywall (Locked Screen) ──────────────────────────────────────
+  if (!hasAccess) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+        
+        {/* Map View blurred/under overlay in background */}
+        <MapView
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={initialRegion}
+          scrollEnabled={false}
+          zoomEnabled={false}
+          rotateEnabled={false}
+          pitchEnabled={false}
+        />
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} />
-        }
-      >
-        <Animated.View style={{ opacity: fadeAnim }}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View>
-              <Text style={styles.greeting}>Welcome back 👋</Text>
-              <Text style={styles.parentName}>Sneha Sharma</Text>
+        {/* Lock Overlay */}
+        <View style={styles.lockOverlay}>
+          <View style={styles.paywallCard}>
+            <Text style={styles.paywallIcon}>🔒</Text>
+            <Text style={styles.paywallTitle}>Tracking Terminated</Text>
+            <Text style={styles.paywallSubtitle}>
+              Your free trial has ended. Subscribe now to access real-time school bus tracking, notifications, and emergency driver updates.
+            </Text>
+
+            {/* Premium pricing badge */}
+            <View style={styles.priceContainer}>
+              <Text style={styles.priceLabel}>Premium Subscription</Text>
+              <Text style={styles.priceValue}>₹530 / month</Text>
             </View>
-            <TouchableOpacity style={styles.notifBell}>
-              <Text style={styles.notifBellIcon}>🔔</Text>
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeText}>2</Text>
+
+            <TouchableOpacity
+              style={styles.payNowButton}
+              onPress={() => navigation.navigate('Payment')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.payNowButtonText}>Pay Now & Reactivate</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.logoutButtonLink}
+              onPress={() => navigation.navigate('Welcome')}
+            >
+              <Text style={styles.logoutButtonTextLink}>Go back to main</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // ─── Unlocked Live Tracking Screen ────────────────────────────────
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Full-Screen Map */}
+        <MapView
+          ref={mapRef}
+          provider={PROVIDER_GOOGLE}
+          style={styles.map}
+          initialRegion={initialRegion}
+          showsUserLocation
+          showsMyLocationButton={false}
+        >
+          {/* Student Stop Marker */}
+          {child?.stopLocation && (
+            <Marker
+              coordinate={{
+                latitude: child.stopLocation.latitude,
+                longitude: child.stopLocation.longitude,
+              }}
+              title={`${child.name}'s Stop`}
+              description={child.stopLocation.label}
+            >
+              <View style={[styles.markerContainer, { borderColor: Colors.success }]}>
+                <Text style={styles.markerEmoji}>
+                  {child.gender === 'Male' ? '👦' : '👧'}
+                </Text>
               </View>
+            </Marker>
+          )}
+
+          {/* Real-time Bus Marker */}
+          {busLocation.bus?.isActive && busLocation.bus.currentLocation && (
+            <Marker
+              coordinate={busLocation.coordinate}
+              title={busLocation.bus.busNumber}
+              description={`Speed: ${busLocation.bus.speed} km/h`}
+            >
+              <View style={[styles.markerContainer, { borderColor: Colors.primary }]}>
+                <Text style={styles.markerEmoji}>🚌</Text>
+              </View>
+            </Marker>
+          )}
+        </MapView>
+
+        {/* FLOATING FLOATER OVERLAYS */}
+        
+        {/* Floating Top Header */}
+        <View style={styles.topContainer}>
+          <View style={styles.headerRow}>
+            <View>
+              <Text style={styles.welcomeText}>Parent Dashboard</Text>
+              <Text style={styles.parentName}>{profile?.name || 'User Profile'}</Text>
+            </View>
+
+            {/* Notification Bell */}
+            <TouchableOpacity
+              style={styles.notificationBell}
+              activeOpacity={0.8}
+              onPress={() => navigation.navigate('Notifications')}
+            >
+              <Text style={styles.bellEmoji}>🔔</Text>
+              {unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadCount}</Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
 
-          {/* Child Selector */}
-          {children.length > 1 && (
-            <View style={styles.childSelector}>
-              {children.map((c, index) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[
-                    styles.childChip,
-                    selectedChild === index && styles.childChipActive,
-                  ]}
-                  onPress={() => setSelectedChild(index)}
-                >
-                  <Text style={styles.childChipEmoji}>
-                    {c.gender === 'Male' ? '👦' : '👧'}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.childChipText,
-                      selectedChild === index && styles.childChipTextActive,
-                    ]}
-                  >
-                    {c.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {currentFeeStatus === 'TRIAL' && (
-            <Text style={styles.trialExpiryText}>
-              Free trial ends: {getTrialExpiryDate()}
-            </Text>
-          )}
-
-          {/* Fee Status Banner */}
-          <FeeStatusBanner
-            status={currentFeeStatus as any}
-            amount={feeStatus.breakdown.total}
-            trialDaysRemaining={feeStatus.trialInfo.trialDaysRemaining}
-            month="June 2026"
-            onPayNow={() => navigation.navigate('Payment')}
-          />
-
-          {/* Paywall or Content */}
-          {!hasAccess ? (
-            <View style={styles.paywallContainer}>
-              <View style={styles.paywallCard}>
-                <Text style={styles.paywallIcon}>🔒</Text>
-                <Text style={styles.paywallTitle}>Tracking Locked</Text>
-                <Text style={styles.paywallSubtitle}>
-                  Pay your pending fees to access live bus tracking and all features.
-                </Text>
-                <TouchableOpacity
-                  style={styles.paywallButton}
-                  onPress={() => navigation.navigate('Payment')}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.paywallButtonText}>Pay Now & Unlock</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            <>
-              {/* Live Tracking Card */}
-              <TouchableOpacity
-                style={styles.trackingCard}
-                onPress={() => navigation.navigate('LiveTracking')}
-                activeOpacity={0.85}
+          {/* Child Selector Row (if multiple children) */}
+          {students.length > 0 && (
+            <View style={styles.childSelectorContainer}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.childSelectorScroll}
               >
-                <View style={styles.trackingCardHeader}>
-                  <View>
-                    <Text style={styles.trackingLabel}>LIVE TRACKING</Text>
-                    <Text style={styles.trackingBusNumber}>
-                      {bus?.busNumber ?? 'No Bus'}
-                    </Text>
-                  </View>
-                  <View
+                {students.map((c, index) => (
+                  <TouchableOpacity
+                    key={c.id}
                     style={[
-                      styles.liveBadge,
-                      { backgroundColor: bus?.isActive ? Colors.success : Colors.textTertiary },
+                      styles.childChip,
+                      selectedChildIndex === index && styles.childChipActive,
                     ]}
+                    onPress={() => handleSelectChild(index)}
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.liveDot} />
-                    <Text style={styles.liveText}>
-                      {bus?.isActive ? 'LIVE' : 'OFFLINE'}
+                    <Text style={styles.childChipEmoji}>
+                      {c.gender === 'Male' ? '👦' : '👧'}
                     </Text>
-                  </View>
-                </View>
-
-                <View style={styles.trackingStats}>
-                  <View style={styles.trackingStat}>
-                    <Text style={styles.trackingStatValue}>
-                      {bus?.speed ?? 0} km/h
+                    <Text
+                      style={[
+                        styles.childChipText,
+                        selectedChildIndex === index && styles.childChipTextActive,
+                      ]}
+                    >
+                      {c.name}
                     </Text>
-                    <Text style={styles.trackingStatLabel}>Speed</Text>
-                  </View>
-                  <View style={styles.trackingStatDivider} />
-                  <View style={styles.trackingStat}>
-                    <Text style={styles.trackingStatValue}>~5 min</Text>
-                    <Text style={styles.trackingStatLabel}>ETA</Text>
-                  </View>
-                  <View style={styles.trackingStatDivider} />
-                  <View style={styles.trackingStat}>
-                    <Text style={styles.trackingStatValue}>
-                      {child?.stopLocation.label ?? '--'}
-                    </Text>
-                    <Text style={styles.trackingStatLabel}>Your Stop</Text>
-                  </View>
-                </View>
-
-                <View style={styles.trackingCTA}>
-                  <Text style={styles.trackingCTAText}>Tap to view live map →</Text>
-                </View>
-              </TouchableOpacity>
-
-              {/* Quick Stats */}
-              <View style={styles.quickStats}>
-                <View style={[styles.quickStatCard, { backgroundColor: Colors.primaryFaded }]}>
-                  <Text style={styles.quickStatValue}>{child?.grade}</Text>
-                  <Text style={styles.quickStatLabel}>Grade</Text>
-                </View>
-                <View style={[styles.quickStatCard, { backgroundColor: Colors.successFaded }]}>
-                  <Text style={styles.quickStatValue}>
-                    {child?.stopLocation.label.split(' ')[0]}
-                  </Text>
-                  <Text style={styles.quickStatLabel}>Stop</Text>
-                </View>
-              </View>
-            </>
-          )}
-
-          {/* Notifications */}
-          <View style={styles.notifSection}>
-            <View style={styles.notifHeader}>
-              <Text style={styles.sectionTitle}>Recent Updates</Text>
-              <TouchableOpacity>
-                <Text style={styles.seeAllText}>See All</Text>
-              </TouchableOpacity>
+                  </TouchableOpacity>
+                ))}
+                
+                {/* Add Child Link */}
+                <TouchableOpacity
+                  style={styles.addChildChip}
+                  onPress={() => navigation.navigate('AddChild')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.addChildChipText}>+ Add Child</Text>
+                </TouchableOpacity>
+              </ScrollView>
             </View>
+          )}
+        </View>
 
-            {notifications.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyIcon}>📭</Text>
-                <Text style={styles.emptyText}>No recent updates</Text>
-              </View>
-            ) : (
-              notifications.map((notif) => (
-                <NotificationCard
-                  key={notif.id}
-                  notification={notif}
-                  onPress={() => notificationService.markRead(notif.id)}
-                />
-              ))
-            )}
+        {/* Floating ETA Pill */}
+        {child && (
+          <View style={styles.etaPillContainer}>
+            <View style={[
+              styles.etaPill,
+              busLocation.bus?.isActive ? styles.etaActive : styles.etaInactive
+            ]}>
+              <View style={[
+                styles.etaDot,
+                { backgroundColor: busLocation.bus?.isActive ? Colors.success : Colors.textTertiary }
+              ]} />
+              <Text style={styles.etaText}>
+                {busLocation.bus?.isActive
+                  ? busLocation.eta !== null
+                    ? `Bus arriving in ~${busLocation.eta} mins`
+                    : 'Bus active • Calculating ETA...'
+                  : 'Bus is currently offline'}
+              </Text>
+            </View>
           </View>
-        </Animated.View>
-      </ScrollView>
+        )}
+
+        {/* BOTTOM SHEET FOR CHILD AND TRACKING DETAILS */}
+        {child && (
+          <Animated.View
+            style={[
+              styles.customBottomSheet,
+              { transform: [{ translateY: sheetTranslateY }] }
+            ]}
+          >
+            {/* Drag Handle Area */}
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={toggleSheet}
+              {...panResponder.panHandlers}
+              style={styles.dragHandleArea}
+            >
+              <View style={styles.bottomSheetIndicator} />
+            </TouchableOpacity>
+
+            <View style={styles.bottomSheetContent}>
+              {/* Collapsed top bar summary info */}
+              <View style={styles.bottomSheetHeader}>
+                <View>
+                  <Text style={styles.sheetChildName}>{child.name}</Text>
+                  <Text style={styles.sheetSubText}>
+                    Grade {child.grade} • Bus {busLocation.bus?.busNumber || 'N/A'}
+                  </Text>
+                </View>
+
+                {/* Trial Expiry Badge if on trial */}
+                {feeStatus.status === 'TRIAL' && (
+                  <View style={styles.trialBadge}>
+                    <Text style={styles.trialBadgeText}>
+                      Trial: {feeStatus.daysLeft}d left
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.sheetDivider} />
+
+              {/* Extended Details */}
+              <View style={styles.sheetBody}>
+                {/* Stop Info Row */}
+                <View style={styles.infoRow}>
+                  <View style={styles.infoIconWrapper}>
+                    <Text style={styles.infoRowEmoji}>📍</Text>
+                  </View>
+                  <View style={styles.infoTextWrapper}>
+                    <Text style={styles.infoRowTitle}>Assigned Stop</Text>
+                    <Text style={styles.infoRowVal} numberOfLines={1}>
+                      {child.stopLocation.label}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Driver Info Row */}
+                <View style={styles.infoRow}>
+                  <View style={styles.infoIconWrapper}>
+                    <Text style={styles.infoRowEmoji}>👤</Text>
+                  </View>
+                  <View style={styles.infoTextWrapper}>
+                    <Text style={styles.infoRowTitle}>Driver</Text>
+                    <Text style={styles.infoRowVal}>
+                      {loadingDriver
+                        ? 'Fetching details...'
+                        : driverInfo
+                          ? driverInfo.name
+                          : 'Not assigned'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Contact Button */}
+                {driverInfo && (
+                  <TouchableOpacity
+                    style={styles.callDriverButton}
+                    onPress={handleCallDriver}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.callDriverEmoji}>📞</Text>
+                    <Text style={styles.callDriverButtonText}>Call Driver</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </Animated.View>
+        )}
+      </View>
     </View>
   );
 };
@@ -274,292 +556,404 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  center: {
+  loadingContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  loadingEmoji: {
-    fontSize: 48,
-    marginBottom: 12,
+    backgroundColor: Colors.background,
   },
   loadingText: {
+    marginTop: 12,
     fontSize: 15,
-    color: Colors.textSecondary,
-    fontWeight: '500',
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 100,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  greeting: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    fontWeight: '500',
-  },
-  parentName: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: Colors.dark,
-    marginTop: 4,
-  },
-  notifBell: {
-    position: 'relative',
-    width: 48,
-    height: 48,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    elevation: 2,
-  },
-  notifBellIcon: {
-    fontSize: 22,
-  },
-  notifBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: Colors.error,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  notifBadgeText: {
-    color: Colors.white,
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  childSelector: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 20,
-  },
-  childChip: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: Colors.white,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    gap: 8,
-  },
-  childChipActive: {
-    backgroundColor: Colors.primaryFaded,
-    borderColor: Colors.primary,
-  },
-  childChipEmoji: {
-    fontSize: 18,
-  },
-  childChipText: {
-    fontSize: 14,
     fontWeight: '600',
     color: Colors.textSecondary,
   },
-  childChipTextActive: {
-    color: Colors.primary,
+  map: {
+    ...StyleSheet.absoluteFillObject,
   },
-  trialExpiryText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.warning,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  // Paywall
-  paywallContainer: {
-    marginBottom: 24,
+  // Paywall lock screen styles
+  lockOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
   },
   paywallCard: {
     backgroundColor: Colors.white,
-    borderRadius: 22,
+    borderRadius: 24,
     padding: 32,
+    width: '100%',
     alignItems: 'center',
-    elevation: 4,
-    shadowColor: Colors.dark,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
+    elevation: 8,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
   },
   paywallIcon: {
-    fontSize: 48,
+    fontSize: 54,
     marginBottom: 16,
   },
   paywallTitle: {
     fontSize: 22,
     fontWeight: '800',
     color: Colors.dark,
-    marginBottom: 8,
+    marginBottom: 10,
+    textAlign: 'center',
   },
   paywallSubtitle: {
     fontSize: 14,
     color: Colors.textSecondary,
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: 22,
     marginBottom: 24,
   },
-  paywallButton: {
+  priceContainer: {
+    backgroundColor: Colors.background,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
     width: '100%',
-    height: 52,
+    alignItems: 'center',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  priceLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  priceValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.primary,
+  },
+  payNowButton: {
+    width: '100%',
+    height: 54,
     backgroundColor: Colors.error,
     borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 4,
-  },
-  paywallButtonText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  // Tracking Card
-  trackingCard: {
-    backgroundColor: Colors.dark,
-    borderRadius: 22,
-    padding: 20,
-    marginBottom: 20,
-    elevation: 6,
-    shadowColor: Colors.dark,
-    shadowOffset: { width: 0, height: 6 },
+    shadowColor: Colors.error,
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
-    shadowRadius: 12,
+    shadowRadius: 8,
   },
-  trackingCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  trackingLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textTertiary,
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  trackingBusNumber: {
-    fontSize: 18,
-    fontWeight: '700',
+  payNowButtonText: {
     color: Colors.white,
-  },
-  liveBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    gap: 6,
-  },
-  liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: Colors.white,
-  },
-  liveText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: Colors.white,
-    letterSpacing: 0.5,
-  },
-  trackingStats: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
-  },
-  trackingStat: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  trackingStatValue: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  trackingStatLabel: {
-    fontSize: 10,
-    color: Colors.textTertiary,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  trackingStatDivider: {
-    width: 1,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  trackingCTA: {
-    alignItems: 'center',
-  },
-  trackingCTAText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.primaryLight,
-  },
-  quickStats: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 28,
-  },
-  quickStatCard: {
-    flex: 1,
-    borderRadius: 14,
-    padding: 16,
-    alignItems: 'center',
-  },
-  quickStatValue: {
     fontSize: 16,
     fontWeight: '700',
-    color: Colors.dark,
   },
-  quickStatLabel: {
-    fontSize: 11,
+  logoutButtonLink: {
+    marginTop: 16,
+    paddingVertical: 8,
+  },
+  logoutButtonTextLink: {
+    fontSize: 14,
     color: Colors.textSecondary,
-    fontWeight: '500',
-    marginTop: 4,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
-  notifSection: {},
-  notifHeader: {
+  // Map Markers
+  markerContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.white,
+    borderWidth: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+  },
+  markerEmoji: {
+    fontSize: 20,
+  },
+  // Floating overlay containers
+  topContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 54 : 40,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    elevation: 4,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 12,
   },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+  welcomeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  parentName: {
+    fontSize: 18,
+    fontWeight: '800',
     color: Colors.dark,
+    marginTop: 2,
   },
-  seeAllText: {
+  notificationBell: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: Colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  bellEmoji: {
+    fontSize: 20,
+  },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: Colors.error,
+    borderRadius: 9,
+    width: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeText: {
+    color: Colors.white,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  // Child selector chips
+  childSelectorContainer: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    paddingTop: 12,
+  },
+  childSelectorScroll: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  childChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.background,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginRight: 8,
+  },
+  childChipActive: {
+    backgroundColor: Colors.primaryFaded,
+    borderColor: Colors.primary,
+  },
+  childChipEmoji: {
+    fontSize: 16,
+    marginRight: 6,
+  },
+  childChipText: {
     fontSize: 13,
     fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+  childChipTextActive: {
     color: Colors.primary,
   },
-  emptyState: {
+  addChildChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    borderStyle: 'dashed',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 28,
+  },
+  addChildChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  // Floating ETA Pill
+  etaPillContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 190 : 170,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  etaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 24,
+    elevation: 4,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+  },
+  etaActive: {
+    backgroundColor: Colors.dark,
+  },
+  etaInactive: {
     backgroundColor: Colors.white,
-    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  emptyIcon: {
-    fontSize: 36,
-    marginBottom: 8,
+  etaDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
   },
-  emptyText: {
-    fontSize: 14,
-    color: Colors.textTertiary,
+  etaText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.white,
+  },
+  // Bottom Sheet
+  customBottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 340,
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    elevation: 10,
+    shadowColor: Colors.black,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    paddingBottom: 20,
+  },
+  dragHandleArea: {
+    width: '100%',
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bottomSheetIndicator: {
+    backgroundColor: Colors.textTertiary,
+    width: 44,
+    height: 4,
+    borderRadius: 2,
+  },
+  bottomSheetContent: {
+    paddingHorizontal: 24,
+    paddingTop: 4,
+  },
+  bottomSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 16,
+  },
+  sheetChildName: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.dark,
+  },
+  sheetSubText: {
+    fontSize: 13,
     fontWeight: '500',
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  trialBadge: {
+    backgroundColor: Colors.warningFaded,
+    borderColor: Colors.warning,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  trialBadgeText: {
+    color: Colors.warning,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  sheetDivider: {
+    height: 1,
+    backgroundColor: Colors.divider,
+    marginBottom: 18,
+  },
+  sheetBody: {
+    gap: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  infoIconWrapper: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: Colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  infoRowEmoji: {
+    fontSize: 18,
+  },
+  infoTextWrapper: {
+    flex: 1,
+  },
+  infoRowTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  infoRowVal: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.dark,
+    marginTop: 2,
+  },
+  callDriverButton: {
+    flexDirection: 'row',
+    height: 50,
+    backgroundColor: Colors.primary,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 8,
+    elevation: 3,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+  },
+  callDriverEmoji: {
+    fontSize: 18,
+  },
+  callDriverButtonText: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 

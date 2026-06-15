@@ -9,10 +9,10 @@ import { Text, View, StyleSheet } from 'react-native';
 import Colors from '../constants/colors';
 
 import ParentHome from '../screens/parent/ParentHome';
-import LiveTracking from '../screens/parent/LiveTracking';
 import PaymentScreen from '../screens/parent/PaymentScreen';
 import TransactionHistory from '../screens/parent/TransactionHistory';
 import AddChild from '../screens/parent/AddChild';
+import NotificationsScreen from '../screens/parent/NotificationsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -29,7 +29,6 @@ function ParentTabs() {
         tabBarIcon: ({ focused }) => {
           const icons: Record<string, string> = {
             Home: '🏠',
-            Track: '📍',
             Pay: '💳',
             History: '📜',
           };
@@ -42,7 +41,6 @@ function ParentTabs() {
       })}
     >
       <Tab.Screen name="Home" component={ParentHome} />
-      <Tab.Screen name="Track" component={LiveTracking} />
       <Tab.Screen name="Pay" component={PaymentScreen} />
       <Tab.Screen name="History" component={TransactionHistory} />
     </Tab.Navigator>
@@ -53,9 +51,9 @@ export function ParentStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="ParentTabsInner" component={ParentTabs} />
-      <Stack.Screen name="LiveTracking" component={LiveTracking} />
       <Stack.Screen name="Payment" component={PaymentScreen} />
       <Stack.Screen name="AddChild" component={AddChild} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} />
     </Stack.Navigator>
   );
 }

@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import {
   initializeAuth,
-  // @ts-ignore - this is available at runtime but TS types in this version sometimes miss it
+  // @ts-ignore - this is available at runtime in React Native but TS sometimes flags it
   getReactNativePersistence,
   signInWithPhoneNumber,
   PhoneAuthProvider,
@@ -72,6 +72,7 @@ export interface Bus {
   currentLocation: { latitude: number; longitude: number };
   isActive: boolean;
   speed: number;
+  lastUpdated?: any;
 }
 
 export interface Trip {
@@ -93,6 +94,7 @@ export interface Student {
   grade: string;
   gender: 'Male' | 'Female' | 'Other';
   stopLocation: { latitude: number; longitude: number; label: string };
+  stopOrder?: number;
 }
 
 export interface Fee {

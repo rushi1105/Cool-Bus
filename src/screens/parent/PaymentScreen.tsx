@@ -4,7 +4,7 @@
  * Monthly fee breakdown, trial info, and Pay Now button.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,13 +16,38 @@ import {
 } from 'react-native';
 import Colors from '../../constants/colors';
 import { useFeeStatus } from '../../hooks/useFeeStatus';
+import { useAuth } from '../../hooks/useAuth';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db, type Student } from '../../services/firebase';
 
 interface PaymentScreenProps {
   navigation: any;
 }
 
 export const PaymentScreen: React.FC<PaymentScreenProps> = ({ navigation }) => {
-  const feeStatus = useFeeStatus();
+  const { user } = useAuth();
+  const [student, setStudent] = useState<Student | null>(null);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const loadStudent = async () => {
+      try {
+        const q = query(
+          collection(db, 'students'),
+          where('parentId', '==', user.uid)
+        );
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          setStudent({ id: snap.docs[0].id, ...snap.docs[0].data() } as Student);
+        }
+      } catch (err) {
+        console.error('Error loading student for payment:', err);
+      }
+    };
+    loadStudent();
+  }, [user?.uid]);
+
+  const feeStatus = useFeeStatus(user?.uid || null, student?.id || null);
   const [isPaying, setIsPaying] = useState(false);
 
   const handlePay = async () => {
@@ -50,11 +75,15 @@ export const PaymentScreen: React.FC<PaymentScreenProps> = ({ navigation }) => {
         {/* Student Card */}
         <View style={styles.studentCard}>
           <View style={styles.studentAvatar}>
-            <Text style={styles.studentAvatarText}>👦</Text>
+            <Text style={styles.studentAvatarText}>
+              {student?.gender === 'Female' ? '👧' : '👦'}
+            </Text>
           </View>
           <View>
-            <Text style={styles.studentName}>Arjun Sharma</Text>
-            <Text style={styles.studentGrade}>Grade 5th • SafeRide Transport</Text>
+            <Text style={styles.studentName}>{student?.name || 'Arjun Sharma'}</Text>
+            <Text style={styles.studentGrade}>
+              Grade {student?.grade || '5th'} • School Bus Transport
+            </Text>
           </View>
         </View>
 
@@ -153,7 +182,14 @@ export const PaymentScreen: React.FC<PaymentScreenProps> = ({ navigation }) => {
             <Text style={styles.paidBannerIcon}>✅</Text>
             <Text style={styles.paidBannerText}>
               June 2026 fees paid on{' '}
-              {currentFee.paidAt?.toLocaleDateString('en-IN') ?? 'N/A'}
+              {currentFee.paidAt
+                ? (currentFee.paidAt instanceof Date
+                    ? currentFee.paidAt
+                    : ((currentFee.paidAt as any).toDate
+                        ? (currentFee.paidAt as any).toDate()
+                        : new Date(currentFee.paidAt))
+                  ).toLocaleDateString('en-IN')
+                : 'N/A'}
             </Text>
           </View>
         )}

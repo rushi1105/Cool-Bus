@@ -33,6 +33,10 @@ import FirebaseRecaptcha, {
   type FirebaseRecaptchaHandle,
 } from '../../components/FirebaseRecaptcha';
 
+
+// TEST MODE — set to false before production
+const TEST_MODE = false;
+const TEST_CODE = '123456';
 interface OTPVerifyProps {
   navigation: any;
   route: any;
@@ -89,27 +93,52 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
     setError('');
     try {
       const fullPhone = `+91${phone}`;
-      
-      // The WebView handles reCAPTCHA AND sending the OTP to avoid origin mismatch
+
+      // ── TEST BYPASS ──────────────────────────────
+      if (TEST_MODE) {
+        // Create a fake confirmationResult that accepts only 123456
+        const fakeResult: any = {
+          verificationId: 'test-verification-id',
+          confirm: async (code: string) => {
+            if (code !== TEST_CODE) {
+              const err: any = new Error('Invalid code');
+              err.code = 'auth/invalid-verification-code';
+              throw err;
+            }
+            // Return a fake user credential
+            return {
+              user: {
+                uid: `test-uid-${phone}`,
+                phoneNumber: fullPhone,
+              },
+            };
+          },
+        };
+        setConfirmationResult(fakeResult);
+        setIsSendingOTP(false);
+        setResendTimer(30);
+        setTimeout(() => inputRefs.current[0]?.focus(), 300);
+        return;
+      }
+      // ── END TEST BYPASS ──────────────────────────
+
+      // Real OTP flow (your original code)
       const verificationId = await recaptchaRef.current?.sendOTP(fullPhone);
       if (!verificationId) {
         throw new Error('Failed to send OTP or get verification ID');
       }
 
-      // Mock ConfirmationResult to use the new verificationId
       const fakeResult: any = {
         verificationId,
         confirm: async (code: string) => {
           const credential = PhoneAuthProvider.credential(verificationId, code);
           return await signInWithCredential(auth, credential);
-        }
+        },
       };
 
       setConfirmationResult(fakeResult);
       setIsSendingOTP(false);
       setResendTimer(30);
-
-      // Focus first input
       setTimeout(() => inputRefs.current[0]?.focus(), 300);
     } catch (err: any) {
       console.error('[OTPVerify] sendOTP error:', err);

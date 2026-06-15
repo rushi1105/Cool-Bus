@@ -18,7 +18,15 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ navigati
 
   const transactions = mockFees
     .filter((f) => f.parentId === 'par-1' && f.status === 'PAID')
-    .sort((a, b) => (b.paidAt?.getTime() ?? 0) - (a.paidAt?.getTime() ?? 0));
+    .sort((a, b) => {
+      const getMs = (val: any) => {
+        if (!val) return 0;
+        if (val instanceof Date) return val.getTime();
+        if (val.toDate) return val.toDate().getTime();
+        return new Date(val).getTime();
+      };
+      return getMs(b.paidAt) - getMs(a.paidAt);
+    });
 
   return (
     <View style={styles.container}>
@@ -71,7 +79,14 @@ export const TransactionHistory: React.FC<TransactionHistoryProps> = ({ navigati
               <View style={styles.txContent}>
                 <Text style={styles.txMonth}>{tx.month}</Text>
                 <Text style={styles.txDate}>
-                  Paid on {tx.paidAt?.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  Paid on {tx.paidAt
+                    ? (tx.paidAt instanceof Date
+                        ? tx.paidAt
+                        : ((tx.paidAt as any).toDate
+                            ? (tx.paidAt as any).toDate()
+                            : new Date(tx.paidAt))
+                      ).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                    : 'N/A'}
                 </Text>
               </View>
               <View style={styles.txRight}>

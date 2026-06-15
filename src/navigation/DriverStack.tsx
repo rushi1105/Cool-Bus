@@ -9,9 +9,7 @@ import { Text, View, StyleSheet } from 'react-native';
 import Colors from '../constants/colors';
 
 import DriverHome from '../screens/driver/DriverHome';
-import DriverMap from '../screens/driver/DriverMap';
 import DriverProfile from '../screens/driver/DriverProfile';
-import SOSButton from '../screens/driver/SOSButton';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -28,8 +26,6 @@ function DriverTabs() {
         tabBarIcon: ({ focused }) => {
           const icons: Record<string, string> = {
             Home: '🏠',
-            Map: '🗺️',
-            SOS: '🚨',
             Profile: '👤',
           };
           return (
@@ -41,14 +37,6 @@ function DriverTabs() {
       })}
     >
       <Tab.Screen name="Home" component={DriverHome} />
-      <Tab.Screen name="Map" component={DriverMap} />
-      <Tab.Screen
-        name="SOS"
-        component={SOSButton}
-        options={{
-          tabBarLabelStyle: [styles.tabLabel, { color: Colors.error }],
-        }}
-      />
       <Tab.Screen name="Profile" component={DriverProfile} />
     </Tab.Navigator>
   );

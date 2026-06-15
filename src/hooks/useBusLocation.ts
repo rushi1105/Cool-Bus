@@ -1,86 +1,148 @@
 /**
  * useBusLocation Hook
  *
- * Tracks real-time bus location with simulated movement.
+ * Tracks real-time bus location via Firestore onSnapshot on /buses/{busId}.
+ * Provides animated coordinate via standard RN Animated API and ETA calculation.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import locationService, { LocationCoords } from '../services/location';
-import { Bus, mockBuses } from '../services/firebase';
+import { useState, useEffect, useRef } from 'react';
+import { Animated } from 'react-native';
+import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
+import { db, type Bus } from '../services/firebase';
+import { calculateETA } from '../services/location';
 
 interface UseBusLocationReturn {
-  location: LocationCoords | null;
-  isTracking: boolean;
-  speed: number;
-  heading: number;
-  eta: number | null;
-  startTracking: () => void;
-  stopTracking: () => void;
   bus: Bus | null;
+  coordinate: { latitude: number; longitude: number };
+  isActive: boolean;
+  speed: number;
+  eta: number | null;
+  loading: boolean;
+  error: string | null;
 }
 
-export function useBusLocation(busId: string = 'bus-1'): UseBusLocationReturn {
-  const [location, setLocation] = useState<LocationCoords | null>(null);
-  const [isTracking, setIsTracking] = useState(false);
-  const [speed, setSpeed] = useState(0);
-  const [heading, setHeading] = useState(0);
-  const [eta, setEta] = useState<number | null>(null);
+export function useBusLocation(
+  busId: string | null,
+  stopLocation?: { latitude: number; longitude: number } | null,
+): UseBusLocationReturn {
   const [bus, setBus] = useState<Bus | null>(null);
+  const [isActive, setIsActive] = useState(false);
+  const [speed, setSpeed] = useState(0);
+  const [eta, setEta] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [coordinate, setCoordinate] = useState({ latitude: 0, longitude: 0 });
 
+  const latAnim = useRef(new Animated.Value(0)).current;
+  const lngAnim = useRef(new Animated.Value(0)).current;
+  const isFirstUpdate = useRef(true);
+  const animRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  // Listeners to sync Animated values → state
   useEffect(() => {
-    const found = mockBuses.find((b) => b.id === busId) ?? null;
-    setBus(found);
-    if (found) {
-      setLocation({
-        latitude: found.currentLocation.latitude,
-        longitude: found.currentLocation.longitude,
-        heading: 0,
-        speed: found.speed,
-        accuracy: 10,
-      });
-      setSpeed(found.speed);
-    }
-  }, [busId]);
-
-  const startTracking = useCallback(() => {
-    setIsTracking(true);
-    locationService.startWatching((coords) => {
-      setLocation(coords);
-      setSpeed(Math.round(coords.speed));
-      setHeading(Math.round(coords.heading));
-
-      // Calculate mock ETA to a fixed stop
-      const stopLocation = { latitude: 12.9750, longitude: 77.5980 };
-      const distance = locationService.getDistance(
-        { latitude: coords.latitude, longitude: coords.longitude },
-        stopLocation,
-      );
-      const etaMin = locationService.estimateETA(distance, coords.speed);
-      setEta(etaMin);
-    }, 3000);
-  }, []);
-
-  const stopTracking = useCallback(() => {
-    setIsTracking(false);
-    locationService.stopWatching();
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
+    const latSub = latAnim.addListener(({ value }) => {
+      setCoordinate((prev) => ({ ...prev, latitude: value }));
+    });
+    const lngSub = lngAnim.addListener(({ value }) => {
+      setCoordinate((prev) => ({ ...prev, longitude: value }));
+    });
     return () => {
-      locationService.stopWatching();
+      latAnim.removeListener(latSub);
+      lngAnim.removeListener(lngSub);
     };
-  }, []);
+  }, [latAnim, lngAnim]);
+
+  useEffect(() => {
+    if (!busId) {
+      setBus(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    const unsubscribe: Unsubscribe = onSnapshot(
+      doc(db, 'buses', busId),
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          setBus(null);
+          setIsActive(false);
+          setLoading(false);
+          return;
+        }
+
+        const data = { id: snapshot.id, ...snapshot.data() } as Bus;
+        setBus(data);
+        setIsActive(data.isActive);
+        setSpeed(data.speed);
+
+        const lat = data.currentLocation.latitude;
+        const lng = data.currentLocation.longitude;
+
+        // Cancel any in-flight animation
+        animRef.current?.stop();
+
+        if (isFirstUpdate.current) {
+          // First update — jump to position
+          latAnim.setValue(lat);
+          lngAnim.setValue(lng);
+          setCoordinate({ latitude: lat, longitude: lng });
+          isFirstUpdate.current = false;
+        } else {
+          // Subsequent updates — animate smoothly via RN Animated
+          animRef.current = Animated.parallel([
+            Animated.timing(latAnim, {
+              toValue: lat,
+              duration: 1000,
+              useNativeDriver: false,
+            }),
+            Animated.timing(lngAnim, {
+              toValue: lng,
+              duration: 1000,
+              useNativeDriver: false,
+            }),
+          ]);
+          animRef.current.start();
+        }
+
+        // Calculate ETA if stop location provided
+        if (stopLocation && data.isActive) {
+          const etaMin = calculateETA(
+            lat,
+            lng,
+            stopLocation.latitude,
+            stopLocation.longitude,
+          );
+          setEta(etaMin);
+        } else {
+          setEta(null);
+        }
+
+        setLoading(false);
+      },
+      (err) => {
+        console.error('[useBusLocation] Snapshot error:', err);
+        setError('Failed to track bus location');
+        setLoading(false);
+      },
+    );
+
+    return () => {
+      unsubscribe();
+      animRef.current?.stop();
+      isFirstUpdate.current = true;
+    };
+  }, [busId, stopLocation?.latitude, stopLocation?.longitude, latAnim, lngAnim]);
 
   return {
-    location,
-    isTracking,
-    speed,
-    heading,
-    eta,
-    startTracking,
-    stopTracking,
     bus,
+    coordinate,
+    isActive,
+    speed,
+    eta,
+    loading,
+    error,
   };
 }
 
