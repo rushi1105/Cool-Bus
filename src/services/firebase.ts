@@ -12,6 +12,7 @@ import {
   getDoc,
   setDoc,
   addDoc,
+  updateDoc,
   collection,
   query,
   where,
@@ -59,6 +60,7 @@ export interface User {
   operatorId?: string;
   operatorCode?: string;
   busNumber?: string;
+  busId?: string;
   shift?: string;
   avatarUrl?: string;
   createdAt?: any;
@@ -232,6 +234,23 @@ export async function fetchOperators(): Promise<Operator[]> {
 }
 
 /**
+ * Fetch buses for a given operatorId from Firestore
+ */
+export async function fetchBusesByOperator(operatorId: string): Promise<Bus[]> {
+  try {
+    const q = query(
+      collection(db, 'buses'),
+      where('operatorId', '==', operatorId)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Bus));
+  } catch (err) {
+    console.error('[Firebase] fetchBusesByOperator error:', err);
+    return [];
+  }
+}
+
+/**
  * Find an operator by their code
  */
 export async function getOperatorByCode(
@@ -262,6 +281,7 @@ export async function registerDriver(
     phone: string;
     operatorId: string;
     busNumber: string;
+    busId: string;
     shift: string;
   },
 ): Promise<void> {
@@ -272,7 +292,12 @@ export async function registerDriver(
     role: 'driver',
     operatorId: data.operatorId,
     busNumber: data.busNumber,
+    busId: data.busId,
     shift: data.shift,
+  });
+
+  await updateDoc(doc(db, 'buses', data.busId), {
+    driverId: uid,
   });
 }
 
@@ -289,11 +314,22 @@ export async function registerParent(
     grade: string;
     gender: string;
     operatorCode: string;
+    operatorId: string;
+    busId: string;
+    stopOrder: number;
+    stopLocation: {
+      latitude: number;
+      longitude: number;
+      label: string;
+    };
   },
 ): Promise<void> {
-  // 1. Resolve operator by code
-  const operator = await getOperatorByCode(data.operatorCode);
-  const operatorId = operator?.id ?? '';
+  // 1. Resolve operator by code (fallback if not passed correctly)
+  let operatorId = data.operatorId;
+  if (!operatorId) {
+    const operator = await getOperatorByCode(data.operatorCode);
+    operatorId = operator?.id ?? '';
+  }
 
   // 2. Create user doc
   await createUserDoc(uid, {
@@ -311,11 +347,12 @@ export async function registerParent(
   const studentId = await addStudentDoc({
     name: data.childName,
     parentId: uid,
-    busId: '',  // will be assigned by operator later
+    busId: data.busId,
     operatorId,
     grade: data.grade,
     gender: data.gender as 'Male' | 'Female' | 'Other',
-    stopLocation: { latitude: 0, longitude: 0, label: '' },
+    stopLocation: data.stopLocation,
+    stopOrder: data.stopOrder,
   });
 
   // 5. Create fee record

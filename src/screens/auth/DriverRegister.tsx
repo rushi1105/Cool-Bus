@@ -16,9 +16,10 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
-import { fetchOperators, type Operator } from '../../services/firebase';
+import { fetchOperators, fetchBusesByOperator, type Operator, type Bus } from '../../services/firebase';
 import Config from '../../constants/config';
 
 interface DriverRegisterProps {
@@ -34,6 +35,12 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
   const [showOperatorPicker, setShowOperatorPicker] = useState(false);
   const [operators, setOperators] = useState<Operator[]>([]);
   const [loadingOperators, setLoadingOperators] = useState(true);
+  
+  const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
+  const [buses, setBuses] = useState<Bus[]>([]);
+  const [loadingBuses, setLoadingBuses] = useState(false);
+  const [busError, setBusError] = useState(false);
+  const [showBusPicker, setShowBusPicker] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -57,6 +64,32 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
     })();
   }, []);
 
+  const loadBuses = async (operatorId: string) => {
+    setLoadingBuses(true);
+    setBusError(false);
+    try {
+      const fetchedBuses = await fetchBusesByOperator(operatorId);
+      setBuses(fetchedBuses);
+    } catch (err) {
+      console.error('[DriverRegister] Failed to fetch buses:', err);
+      setBusError(true);
+    } finally {
+      setLoadingBuses(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedOperator) {
+      setSelectedBusId(null);
+      setBusNumber('');
+      loadBuses(selectedOperator);
+    } else {
+      setBuses([]);
+      setSelectedBusId(null);
+      setBusNumber('');
+    }
+  }, [selectedOperator]);
+
   const isFormValid = fullName.trim() && phone.trim().length >= 10 && selectedOperator && busNumber.trim();
 
   const handleContinue = () => {
@@ -68,6 +101,7 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
         phone: '+91' + phone,
         operatorId: selectedOperator,
         busNumber,
+        busId: selectedBusId,
         shift: selectedShift,
       },
     });
@@ -188,18 +222,82 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
               )}
             </View>
 
-            {/* Bus Number */}
-            <View style={styles.field}>
-              <Text style={styles.label}>Bus Registration Number</Text>
-              <TextInput
-                style={styles.input}
-                value={busNumber}
-                onChangeText={(text) => setBusNumber(text.toUpperCase())}
-                placeholder="KA-01-AB-1234"
-                placeholderTextColor={Colors.textTertiary}
-                autoCapitalize="characters"
-              />
-            </View>
+            {/* Bus Dropdown */}
+            {selectedOperator && (
+              <View style={styles.field}>
+                <Text style={styles.label}>Select your bus</Text>
+                <TouchableOpacity
+                  style={[styles.input, styles.picker]}
+                  onPress={() => setShowBusPicker(!showBusPicker)}
+                >
+                  <Text
+                    style={[
+                      styles.pickerText,
+                      !selectedBusId && styles.pickerPlaceholder,
+                    ]}
+                  >
+                    {(() => {
+                      const selectedBusObj = buses.find((b) => b.id === selectedBusId) as any;
+                      return selectedBusObj
+                        ? `${selectedBusObj.busNumber}${selectedBusObj.routeName ? ' — ' + selectedBusObj.routeName : ''}${selectedBusObj.shift ? ' (' + selectedBusObj.shift + ')' : ''}`
+                        : 'Select your bus';
+                    })()}
+                  </Text>
+                  <Text style={styles.pickerArrow}>
+                    {showBusPicker ? '▲' : '▼'}
+                  </Text>
+                </TouchableOpacity>
+
+                {showBusPicker && (
+                  <View style={styles.pickerDropdown}>
+                    {loadingBuses ? (
+                      <View style={styles.dropdownStateView}>
+                        <ActivityIndicator size="small" color={Colors.primary} />
+                        <Text style={styles.dropdownStateText}>Loading buses...</Text>
+                      </View>
+                    ) : busError ? (
+                      <TouchableOpacity
+                        style={styles.dropdownStateView}
+                        onPress={() => selectedOperator && loadBuses(selectedOperator)}
+                      >
+                        <Text style={styles.dropdownErrorText}>Failed to load buses. Tap to retry.</Text>
+                      </TouchableOpacity>
+                    ) : buses.length === 0 ? (
+                      <View style={styles.dropdownStateView}>
+                        <Text style={styles.dropdownStateText}>No buses available for this operator</Text>
+                      </View>
+                    ) : (
+                      buses.map((bus: any) => {
+                        const busLabel = `${bus.busNumber}${bus.routeName ? ' — ' + bus.routeName : ''}${bus.shift ? ' (' + bus.shift + ')' : ''}`;
+                        return (
+                          <TouchableOpacity
+                            key={bus.id}
+                            style={[
+                              styles.pickerOption,
+                              selectedBusId === bus.id && styles.pickerOptionActive,
+                            ]}
+                            onPress={() => {
+                              setSelectedBusId(bus.id);
+                              setBusNumber(bus.busNumber);
+                              setShowBusPicker(false);
+                            }}
+                          >
+                            <Text
+                              style={[
+                                styles.pickerOptionText,
+                                selectedBusId === bus.id && styles.pickerOptionTextActive,
+                              ]}
+                            >
+                              {busLabel}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Shift Selector */}
             <View style={styles.field}>
@@ -448,6 +546,22 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 18,
     fontWeight: '300',
+  },
+  dropdownStateView: {
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  dropdownStateText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  dropdownErrorText: {
+    fontSize: 14,
+    color: Colors.error,
+    fontWeight: '600',
   },
 });
 

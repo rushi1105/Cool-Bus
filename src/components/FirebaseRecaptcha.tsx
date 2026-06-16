@@ -18,7 +18,7 @@ import React, {
   useState,
   useCallback,
 } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import Config from '../constants/config';
 
@@ -46,8 +46,17 @@ const HTML_CONTENT = `
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: transparent;
+    }
+  </style>
 </head>
-<body>
+<body style="background-color: transparent;">
   <div id="recaptcha-container"></div>
   <script>
     try {
@@ -89,6 +98,7 @@ export const FirebaseRecaptcha = forwardRef<FirebaseRecaptchaHandle, Props>(
   ({ onReady }, ref) => {
     const webViewRef = useRef<WebView>(null);
     const [isReady, setIsReady] = useState(false);
+    const [visible, setVisible] = useState(false);
     const pendingResolve = useRef<((token: string) => void) | null>(null);
     const pendingReject = useRef<((err: Error) => void) | null>(null);
 
@@ -126,8 +136,21 @@ export const FirebaseRecaptcha = forwardRef<FirebaseRecaptchaHandle, Props>(
             reject(new Error('reCAPTCHA not ready yet'));
             return;
           }
-          pendingResolve.current = resolve;
-          pendingReject.current = reject;
+
+          setVisible(true);
+
+          const cleanupAndResolve = (token: string) => {
+            setVisible(false);
+            resolve(token);
+          };
+
+          const cleanupAndReject = (err: Error) => {
+            setVisible(false);
+            reject(err);
+          };
+
+          pendingResolve.current = cleanupAndResolve;
+          pendingReject.current = cleanupAndReject;
 
           // Trigger sendOTP in WebView
           webViewRef.current?.injectJavaScript(`
@@ -139,8 +162,8 @@ export const FirebaseRecaptcha = forwardRef<FirebaseRecaptchaHandle, Props>(
 
           // Timeout after 30 seconds
           setTimeout(() => {
-            if (pendingResolve.current === resolve) {
-              pendingReject.current?.(new Error('reCAPTCHA timeout'));
+            if (pendingResolve.current === cleanupAndResolve) {
+              cleanupAndReject(new Error('reCAPTCHA timeout'));
               pendingResolve.current = null;
               pendingReject.current = null;
             }
@@ -150,7 +173,7 @@ export const FirebaseRecaptcha = forwardRef<FirebaseRecaptchaHandle, Props>(
     }));
 
     return (
-      <View style={styles.container}>
+      <View style={visible ? styles.container : styles.containerHidden}>
         <WebView
           ref={webViewRef}
           source={{ html: HTML_CONTENT, baseUrl: 'https://localhost' }}
@@ -158,7 +181,23 @@ export const FirebaseRecaptcha = forwardRef<FirebaseRecaptchaHandle, Props>(
           javaScriptEnabled
           originWhitelist={['*']}
           style={styles.webview}
+          containerStyle={{ backgroundColor: 'transparent' }}
         />
+        {visible && (
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => {
+              if (pendingReject.current) {
+                pendingReject.current(new Error('reCAPTCHA cancelled by user'));
+                pendingResolve.current = null;
+                pendingReject.current = null;
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.closeButtonText}>Cancel Verification</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   },
@@ -168,15 +207,46 @@ FirebaseRecaptcha.displayName = 'FirebaseRecaptcha';
 
 const styles = StyleSheet.create({
   container: {
-    width: 0,
-    height: 0,
-    overflow: 'hidden',
     position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    zIndex: 9999,
+  },
+  containerHidden: {
+    position: 'absolute',
+    top: -9999,
+    left: -9999,
+    width: 1,
+    height: 1,
+    opacity: 0,
   },
   webview: {
-    width: 0,
-    height: 0,
-    opacity: 0,
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  closeButton: {
+    position: 'absolute',
+    bottom: 50,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  closeButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 

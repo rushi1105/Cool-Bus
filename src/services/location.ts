@@ -23,8 +23,10 @@ export interface LocationCoords {
  */
 export async function requestLocationPermissions(): Promise<boolean> {
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    return status === 'granted';
+    const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
+    if (fgStatus !== 'granted') return false;
+    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+    return bgStatus === 'granted';
   } catch (err) {
     console.error('[Location] Permission error:', err);
     return false;
@@ -64,8 +66,12 @@ export async function checkBackgroundLocationPermission(): Promise<boolean> {
  */
 export async function startTracking(
   busId: string,
-  _driverId: string,
-  onLocationUpdate?: (coords: LocationCoords) => void,
+  driverId: string,
+  onLocationUpdate?: (location: {
+    latitude: number;
+    longitude: number;
+    speed: number;
+  }) => void,
 ): Promise<Location.LocationSubscription> {
   const subscription = await Location.watchPositionAsync(
     {
@@ -89,7 +95,7 @@ export async function startTracking(
             latitude: coords.latitude,
             longitude: coords.longitude,
           },
-          speed: Math.round(coords.speed),
+          speed: coords.speed || 0,
           isActive: true,
           lastUpdated: serverTimestamp(),
         });
@@ -98,7 +104,13 @@ export async function startTracking(
       }
 
       // Notify caller
-      onLocationUpdate?.(coords);
+      if (onLocationUpdate) {
+        onLocationUpdate({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          speed: coords.speed || 0,
+        });
+      }
     },
   );
 

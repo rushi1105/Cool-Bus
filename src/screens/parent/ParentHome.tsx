@@ -1,12 +1,12 @@
 /**
- * ParentHome Screen — Phase 2
+ * ParentHome Screen
  *
- * Ola-style full-screen map with floating overlays.
- * Shows real-time bus tracking, ETA calculation, child selector,
- * bottom sheet with driver details, and paywall if fees are unpaid.
+ * Ola/Uber inspired real-time tracking map with 5 layers.
+ * Center on child stop, animated bus marker, ETA pill calculation,
+ * bottom card with driver call button, next stop display, and paywall if fees unpaid.
  */
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,538 +15,422 @@ import {
   TouchableOpacity,
   Linking,
   ActivityIndicator,
-  Dimensions,
-  Platform,
-  Alert,
-  ScrollView,
   Animated,
-  PanResponder,
+  Alert,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
-import { db, type Student, type User } from '../../services/firebase';
+import MapView, { Marker, AnimatedRegion, PROVIDER_GOOGLE } from 'react-native-maps';
+import { collection, query, where, getDocs, doc, getDoc, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../../services/firebase';
+import { signOut } from 'firebase/auth';
 import { useAuth } from '../../hooks/useAuth';
-import { useFeeStatus } from '../../hooks/useFeeStatus';
-import { useBusLocation } from '../../hooks/useBusLocation';
-import { useNotifications } from '../../hooks/useNotifications';
+import { calculateETA } from '../../services/location';
 import Colors from '../../constants/colors';
-import FeeStatusBanner from '../../components/FeeStatusBanner';
-
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 interface ParentHomeProps {
   navigation: any;
 }
 
 export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
+
+  // States
+  const [student, setStudent] = useState<any>(null);
+  const [feeStatus, setFeeStatus] = useState<string | null>(null);
+  const [busLocation, setBusLocation] = useState<any>(null);
+  const [driver, setDriver] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [initialRegion, setInitialRegion] = useState<any>(null);
+  const [isActive, setIsActive] = useState<boolean>(false);
+  const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
+
   const mapRef = useRef<MapView>(null);
-  
-  const [isExpanded, setIsExpanded] = useState(false);
-  const isExpandedRef = useRef(false);
-  const sheetTranslateY = useRef(new Animated.Value(180)).current;
 
-  const expandSheet = useCallback(() => {
-    isExpandedRef.current = true;
-    setIsExpanded(true);
-    Animated.spring(sheetTranslateY, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 50,
-      friction: 8,
-    }).start();
-  }, [sheetTranslateY]);
-
-  const collapseSheet = useCallback(() => {
-    isExpandedRef.current = false;
-    setIsExpanded(false);
-    Animated.spring(sheetTranslateY, {
-      toValue: 180,
-      useNativeDriver: true,
-      tension: 50,
-      friction: 8,
-    }).start();
-  }, [sheetTranslateY]);
-
-  const toggleSheet = useCallback(() => {
-    if (isExpandedRef.current) {
-      collapseSheet();
-    } else {
-      expandSheet();
-    }
-  }, [expandSheet, collapseSheet]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        return Math.abs(gestureState.dy) > 5;
-      },
-      onPanResponderMove: (evt, gestureState) => {
-        let nextVal = (isExpandedRef.current ? 0 : 180) + gestureState.dy;
-        nextVal = Math.max(0, Math.min(nextVal, 180));
-        sheetTranslateY.setValue(nextVal);
-      },
-      onPanResponderRelease: (evt, gestureState) => {
-        if (isExpandedRef.current) {
-          if (gestureState.dy > 50) {
-            collapseSheet();
-          } else {
-            expandSheet();
-          }
-        } else {
-          if (gestureState.dy < -50) {
-            expandSheet();
-          } else {
-            collapseSheet();
-          }
-        }
-      },
+  // AnimatedRegion for smooth bus coordinate changes
+  const markerCoord = useRef(
+    new AnimatedRegion({
+      latitude: 19.1873,
+      longitude: 73.1927,
+      latitudeDelta: 0,
+      longitudeDelta: 0,
     })
   ).current;
 
-  // Firestore students data state
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loadingStudents, setLoadingStudents] = useState(true);
-  const [selectedChildIndex, setSelectedChildIndex] = useState(0);
-
-  // Driver details state
-  const [driverInfo, setDriverInfo] = useState<User | null>(null);
-  const [loadingDriver, setLoadingDriver] = useState(false);
-
-  // Map initial region
-  const [initialRegion, setInitialRegion] = useState({
-    latitude: 12.9716,
-    longitude: 77.5946,
-    latitudeDelta: 0.02,
-    longitudeDelta: 0.02,
-  });
-
-  // ─── Step 1: Real-time listen to Parent's children from Firestore ────
+  // On mount: Fetch student, fee status, and set initial coordinates
   useEffect(() => {
     if (!user?.uid) return;
 
-    setLoadingStudents(true);
-    const q = query(
+    setIsLoading(true);
+
+    // 1. Query /students where parentId == uid (limit 1 for first child)
+    const studentQ = query(
       collection(db, 'students'),
       where('parentId', '==', user.uid)
     );
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const list = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Student[];
-        setStudents(list);
-        setLoadingStudents(false);
-
-        // Set initial region if child exists
-        if (list.length > 0 && list[0].stopLocation) {
-          setInitialRegion({
-            latitude: list[0].stopLocation.latitude,
-            longitude: list[0].stopLocation.longitude,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.015,
-          });
-        }
-      },
-      (err) => {
-        console.error('[ParentHome] Students listener error:', err);
-        setLoadingStudents(false);
+    getDocs(studentQ).then(async (studentSnap) => {
+      if (studentSnap.empty) {
+        setStudent(null);
+        setIsLoading(false);
+        return;
       }
-    );
 
-    return () => unsubscribe();
-  }, [user?.uid]);
+      const studentDoc = studentSnap.docs[0];
+      const studentData = { id: studentDoc.id, ...studentDoc.data() } as any;
+      setStudent(studentData);
 
-  // Active child and derived state
-  const child = students[selectedChildIndex] || null;
-
-  // Fee Status Hook
-  const feeStatus = useFeeStatus(user?.uid || null, child?.id || null);
-  const hasAccess = feeStatus.hasAccess;
-
-  // Real-time Bus Location Hook (only fetch if has access and busId exists)
-  const busLocation = useBusLocation(
-    hasAccess ? (child?.busId || null) : null,
-    child?.stopLocation || null
-  );
-
-  // Notifications Hook
-  const { notifications, unreadCount } = useNotifications(user?.uid || null);
-
-  // ─── Step 2: Fetch Driver Details for active child's bus ──────────
-  useEffect(() => {
-    if (!busLocation.bus?.driverId) {
-      setDriverInfo(null);
-      return;
-    }
-
-    setLoadingDriver(true);
-    const driverDocRef = doc(db, 'users', busLocation.bus.driverId);
-    getDoc(driverDocRef)
-      .then((snap) => {
-        if (snap.exists()) {
-          setDriverInfo({ id: snap.id, ...snap.data() } as User);
-        } else {
-          setDriverInfo(null);
-        }
-      })
-      .catch((err) => {
-        console.error('[ParentHome] Fetch driver error:', err);
-      })
-      .finally(() => {
-        setLoadingDriver(false);
-      });
-  }, [busLocation.bus?.driverId]);
-
-  // ─── Step 3: Fit Map bounds to show both Bus and Stop ─────────────
-  useEffect(() => {
-    if (!child || !mapRef.current) return;
-
-    if (busLocation.bus?.isActive && busLocation.bus.currentLocation) {
-      mapRef.current.fitToCoordinates(
-        [
-          {
-            latitude: busLocation.bus.currentLocation.latitude,
-            longitude: busLocation.bus.currentLocation.longitude,
-          },
-          {
-            latitude: child.stopLocation.latitude,
-            longitude: child.stopLocation.longitude,
-          },
-        ],
-        {
-          edgePadding: {
-            top: Platform.OS === 'ios' ? 180 : 150,
-            right: 60,
-            bottom: Platform.OS === 'ios' ? 320 : 280,
-            left: 60,
-          },
-          animated: true,
-        }
-      );
-    } else {
-      // Just center on child's stop
-      mapRef.current.animateToRegion(
-        {
-          latitude: child.stopLocation.latitude,
-          longitude: child.stopLocation.longitude,
+      // Set initial marker coordinate to stop location
+      if (studentData.stopLocation) {
+        markerCoord.setValue({
+          latitude: studentData.stopLocation.latitude,
+          longitude: studentData.stopLocation.longitude,
+          latitudeDelta: 0,
+          longitudeDelta: 0,
+        });
+        setInitialRegion({
+          latitude: studentData.stopLocation.latitude,
+          longitude: studentData.stopLocation.longitude,
           latitudeDelta: 0.015,
           longitudeDelta: 0.015,
-        },
-        1000
-      );
-    }
-  }, [child?.id, busLocation.bus?.isActive, busLocation.bus?.currentLocation]);
+        });
+      } else {
+        // Fallback
+        setInitialRegion({
+          latitude: 19.1873,
+          longitude: 73.1927,
+          latitudeDelta: 0.015,
+          longitudeDelta: 0.015,
+        });
+      }
 
-  // Contact Driver Link
-  const handleCallDriver = () => {
-    if (!driverInfo?.phone) {
-      Alert.alert('Contact Unavailable', 'Driver phone number is not available.');
+      // 2. Query /fees where parentId == uid and studentId == student.id limit 1
+      const feeQ = query(
+        collection(db, 'fees'),
+        where('parentId', '==', user.uid),
+        where('studentId', '==', studentDoc.id)
+      );
+      const feeSnap = await getDocs(feeQ);
+      let fStatus = 'TRIAL';
+      if (!feeSnap.empty) {
+        fStatus = feeSnap.docs[0].data().status || 'UNPAID';
+      }
+      setFeeStatus(fStatus);
+
+      setIsLoading(false);
+    }).catch((err) => {
+      console.error('[ParentHome] Load initial data error:', err);
+      setIsLoading(false);
+    });
+  }, [user?.uid]);
+
+  // Subscribe to /buses/{busId} only if fee status is NOT unpaid
+  useEffect(() => {
+    if (!student?.busId || feeStatus === 'UNPAID') return;
+
+    const unsubscribe = onSnapshot(doc(db, 'buses', student.busId), (snap) => {
+      if (snap.exists()) {
+        const busData = snap.data() as any;
+        if (!busData) return;
+
+        const lat =
+          busData.currentLocation?.latitude ??
+          busData.currentLocation?.lat;
+
+        const lng =
+          busData.currentLocation?.longitude ??
+          busData.currentLocation?.lng;
+
+        if (!lat || !lng) return;
+
+        setBusLocation({
+          ...busData,
+          currentLocation: {
+            latitude: lat,
+            longitude: lng,
+          },
+        });
+
+        setIsActive(busData.isActive === true);
+
+        if (
+          busData.isActive &&
+          student?.stopLocation
+        ) {
+          const eta = calculateETA(
+            lat,
+            lng,
+            student.stopLocation.latitude,
+            student.stopLocation.longitude
+          );
+          setEtaMinutes(eta);
+        }
+
+        // Smoothly animate bus coordinate updates
+        if (busData.isActive) {
+          markerCoord.timing({
+            latitude: lat,
+            longitude: lng,
+            duration: 1000,
+            useNativeDriver: false,
+          } as any).start();
+        }
+      } else {
+        setBusLocation(null);
+        setIsActive(false);
+        setEtaMinutes(null);
+      }
+    }, (err) => {
+      console.error('[ParentHome] Bus stream error:', err);
+    });
+
+    return () => unsubscribe();
+  }, [student?.busId, feeStatus, student?.stopLocation]);
+
+  // Fetch driver profile information on change
+  useEffect(() => {
+    if (!busLocation?.driverId) {
+      setDriver(null);
       return;
     }
-    Linking.openURL(`tel:${driverInfo.phone}`);
-  };
 
-  // Switch Child handler
-  const handleSelectChild = (index: number) => {
-    setSelectedChildIndex(index);
-    // Reset bottom sheet to collapsed state
-    collapseSheet();
-  };
+    getDoc(doc(db, 'users', busLocation.driverId)).then((snap) => {
+      if (snap.exists()) {
+        setDriver(snap.data());
+      } else {
+        setDriver(null);
+      }
+    }).catch(err => {
+      console.error('[ParentHome] Fetch driver error:', err);
+    });
+  }, [busLocation?.driverId]);
 
-  if (loadingStudents || feeStatus.isLoading) {
+  if (isLoading) {
     return (
-      <View style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
+      <View style={[styles.container, styles.center]}>
+        <StatusBar barStyle="dark-content" />
         <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Syncing tracker details...</Text>
+        <Text style={styles.loadingText}>Syncing tracking details...</Text>
       </View>
     );
   }
 
-  // ─── Paywall (Locked Screen) ──────────────────────────────────────
-  if (!hasAccess) {
+  if (!student) {
     return (
-      <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+      <View style={[styles.container, styles.center]}>
+        <StatusBar barStyle="dark-content" />
         
-        {/* Map View blurred/under overlay in background */}
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={initialRegion}
-          scrollEnabled={false}
-          zoomEnabled={false}
-          rotateEnabled={false}
-          pitchEnabled={false}
-        />
+        {/* Floating Logout button inside empty state screen */}
+        <TouchableOpacity
+          style={styles.logoutButton}
+          onPress={() => {
+            Alert.alert(
+              'Logout',
+              'Are you sure you want to logout?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Logout',
+                  style: 'destructive',
+                  onPress: () => {
+                    signOut(auth);
+                  },
+                },
+              ]
+            );
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
 
-        {/* Lock Overlay */}
-        <View style={styles.lockOverlay}>
-          <View style={styles.paywallCard}>
-            <Text style={styles.paywallIcon}>🔒</Text>
-            <Text style={styles.paywallTitle}>Tracking Terminated</Text>
-            <Text style={styles.paywallSubtitle}>
-              Your free trial has ended. Subscribe now to access real-time school bus tracking, notifications, and emergency driver updates.
-            </Text>
-
-            {/* Premium pricing badge */}
-            <View style={styles.priceContainer}>
-              <Text style={styles.priceLabel}>Premium Subscription</Text>
-              <Text style={styles.priceValue}>₹530 / month</Text>
-            </View>
-
-            <TouchableOpacity
-              style={styles.payNowButton}
-              onPress={() => navigation.navigate('Payment')}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.payNowButtonText}>Pay Now & Reactivate</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.logoutButtonLink}
-              onPress={() => navigation.navigate('Welcome')}
-            >
-              <Text style={styles.logoutButtonTextLink}>Go back to main</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        <Text style={styles.noStudentText}>No child registered yet</Text>
+        <TouchableOpacity
+          style={styles.addChildButton}
+          onPress={() => navigation.navigate('AddChild')}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.addChildButtonText}>Add Child</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
-  // ─── Unlocked Live Tracking Screen ────────────────────────────────
-  return (
-    <View style={{ flex: 1 }}>
-      <View style={styles.container}>
-        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+  if (!student.busId || !student.stopLocation) {
+    return (
+      <View style={[styles.container, styles.center, { paddingHorizontal: 24 }]}>
+        <StatusBar barStyle="dark-content" />
+        
+        <TouchableOpacity
+          style={styles.logoutButton}
+          onPress={() => {
+            Alert.alert(
+              'Logout',
+              'Are you sure you want to logout?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Logout',
+                  style: 'destructive',
+                  onPress: () => {
+                    signOut(auth);
+                  },
+                },
+              ]
+            );
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.logoutButtonText}>Logout</Text>
+        </TouchableOpacity>
 
-        {/* Full-Screen Map */}
+        <View style={styles.warningIconContainer}>
+          <Text style={styles.warningEmoji}>🚌</Text>
+        </View>
+        <Text style={styles.unlinkedTitle}>Child Not Linked to a Bus</Text>
+        <Text style={styles.unlinkedSubtitle}>Your child is not linked to a bus yet. Please contact your operator to assign a bus and stop.</Text>
+        <TouchableOpacity
+          style={styles.addChildButton}
+          onPress={() => {}} // User suggested opening dialer, but operator number is dynamic. No-op for now.
+          activeOpacity={0.85}
+        >
+          <Text style={styles.addChildButtonText}>Contact Operator</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+      {/* Floating Logout button */}
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={() => {
+          Alert.alert(
+            'Logout',
+            'Are you sure you want to logout?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Logout',
+                style: 'destructive',
+                onPress: () => {
+                  signOut(auth);
+                },
+              },
+            ]
+          );
+        }}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.logoutButtonText}>Logout</Text>
+      </TouchableOpacity>
+
+      {/* LAYER 1 — MapView base (fills screen, centers on stop) */}
+      {initialRegion && (
         <MapView
           ref={mapRef}
           provider={PROVIDER_GOOGLE}
           style={styles.map}
           initialRegion={initialRegion}
-          showsUserLocation
+          showsUserLocation={false}
           showsMyLocationButton={false}
+          zoomControlEnabled={false}
         >
-          {/* Student Stop Marker */}
-          {child?.stopLocation && (
-            <Marker
-              coordinate={{
-                latitude: child.stopLocation.latitude,
-                longitude: child.stopLocation.longitude,
-              }}
-              title={`${child.name}'s Stop`}
-              description={child.stopLocation.label}
-            >
-              <View style={[styles.markerContainer, { borderColor: Colors.success }]}>
-                <Text style={styles.markerEmoji}>
-                  {child.gender === 'Male' ? '👦' : '👧'}
-                </Text>
-              </View>
-            </Marker>
-          )}
-
-          {/* Real-time Bus Marker */}
-          {busLocation.bus?.isActive && busLocation.bus.currentLocation && (
-            <Marker
-              coordinate={busLocation.coordinate}
-              title={busLocation.bus.busNumber}
-              description={`Speed: ${busLocation.bus.speed} km/h`}
-            >
-              <View style={[styles.markerContainer, { borderColor: Colors.primary }]}>
-                <Text style={styles.markerEmoji}>🚌</Text>
-              </View>
-            </Marker>
-          )}
-        </MapView>
-
-        {/* FLOATING FLOATER OVERLAYS */}
-        
-        {/* Floating Top Header */}
-        <View style={styles.topContainer}>
-          <View style={styles.headerRow}>
-            <View>
-              <Text style={styles.welcomeText}>Parent Dashboard</Text>
-              <Text style={styles.parentName}>{profile?.name || 'User Profile'}</Text>
+        {/* LAYER 2 — Bus marker (only visible if active) */}
+        {isActive && busLocation?.currentLocation && (
+          <Marker.Animated
+            coordinate={markerCoord as any}
+            title={busLocation.busNumber}
+            description={`Speed: ${busLocation.speed || 0} km/h`}
+          >
+            <View style={styles.busMarker}>
+              <Text style={styles.busMarkerText}>🚌</Text>
             </View>
+          </Marker.Animated>
+        )}
 
-            {/* Notification Bell */}
+        {/* LAYER 3 — Stop marker (red pin) */}
+        {student.stopLocation && (
+          <Marker
+            coordinate={{
+              latitude: student.stopLocation.latitude,
+              longitude: student.stopLocation.longitude,
+            }}
+            pinColor="red"
+            title={student.stopLocation.label || `${student.name}'s Stop`}
+          />
+        )}
+      </MapView>
+      )}
+
+      {/* LAYER 4 — ETA pill (floating top-center) */}
+      {feeStatus !== 'UNPAID' && (
+        <View style={styles.etaPill}>
+          <Text style={styles.etaText}>
+            {isActive && etaMinutes !== null
+              ? `Bus arriving in ${etaMinutes} mins`
+              : "Bus hasn't started yet"}
+          </Text>
+        </View>
+      )}
+
+      {/* LAYER 5 — Child info card (floating bottom) */}
+      {feeStatus !== 'UNPAID' && (
+        <View style={styles.childInfoCard}>
+          <Text style={styles.childName}>{student.name}</Text>
+          <Text style={styles.childGrade}>Grade {student.grade}</Text>
+
+          <View style={styles.divider} />
+
+          <Text style={styles.driverLabel}>Driver</Text>
+          <Text style={styles.driverName}>{driver?.name || 'Not Assigned'}</Text>
+
+          {driver?.phone && (
             <TouchableOpacity
-              style={styles.notificationBell}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('Notifications')}
+              style={styles.callButton}
+              onPress={() => Linking.openURL('tel:' + driver.phone)}
+              activeOpacity={0.85}
             >
-              <Text style={styles.bellEmoji}>🔔</Text>
-              {unreadCount > 0 && (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{unreadCount}</Text>
-                </View>
-              )}
+              <Text style={styles.callButtonText}>📞 Call Driver</Text>
             </TouchableOpacity>
-          </View>
+          )}
 
-          {/* Child Selector Row (if multiple children) */}
-          {students.length > 0 && (
-            <View style={styles.childSelectorContainer}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.childSelectorScroll}
-              >
-                {students.map((c, index) => (
-                  <TouchableOpacity
-                    key={c.id}
-                    style={[
-                      styles.childChip,
-                      selectedChildIndex === index && styles.childChipActive,
-                    ]}
-                    onPress={() => handleSelectChild(index)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.childChipEmoji}>
-                      {c.gender === 'Male' ? '👦' : '👧'}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.childChipText,
-                        selectedChildIndex === index && styles.childChipTextActive,
-                      ]}
-                    >
-                      {c.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-                
-                {/* Add Child Link */}
-                <TouchableOpacity
-                  style={styles.addChildChip}
-                  onPress={() => navigation.navigate('AddChild')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.addChildChipText}>+ Add Child</Text>
-                </TouchableOpacity>
-              </ScrollView>
+          {/* Next stop name from bus stops array */}
+          {busLocation?.stops && (
+            <View style={styles.nextStopContainer}>
+              <Text style={styles.nextStopLabel}>Next Stop:</Text>
+              <Text style={styles.nextStopName}>
+                {(() => {
+                  const nextUnvisitedStop = busLocation.stops.find((s: any) => {
+                    const stopId = s.id || s.name || '';
+                    return !busLocation.visitedStops?.includes(stopId);
+                  });
+                  return nextUnvisitedStop?.name || 'No more stops';
+                })()}
+              </Text>
             </View>
           )}
         </View>
+      )}
 
-        {/* Floating ETA Pill */}
-        {child && (
-          <View style={styles.etaPillContainer}>
-            <View style={[
-              styles.etaPill,
-              busLocation.bus?.isActive ? styles.etaActive : styles.etaInactive
-            ]}>
-              <View style={[
-                styles.etaDot,
-                { backgroundColor: busLocation.bus?.isActive ? Colors.success : Colors.textTertiary }
-              ]} />
-              <Text style={styles.etaText}>
-                {busLocation.bus?.isActive
-                  ? busLocation.eta !== null
-                    ? `Bus arriving in ~${busLocation.eta} mins`
-                    : 'Bus active • Calculating ETA...'
-                  : 'Bus is currently offline'}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* BOTTOM SHEET FOR CHILD AND TRACKING DETAILS */}
-        {child && (
-          <Animated.View
-            style={[
-              styles.customBottomSheet,
-              { transform: [{ translateY: sheetTranslateY }] }
-            ]}
-          >
-            {/* Drag Handle Area */}
+      {/* PAYWALL Overlay (locked above map if unpaid status) */}
+      {feeStatus === 'UNPAID' && (
+        <View style={styles.paywallOverlay}>
+          <View style={styles.paywallCard}>
+            <Text style={styles.paywallTitle}>Renew to track</Text>
+            <Text style={styles.paywallBody}>Your free trial has ended</Text>
+            <Text style={styles.paywallAmount}>₹530 / month</Text>
             <TouchableOpacity
-              activeOpacity={1}
-              onPress={toggleSheet}
-              {...panResponder.panHandlers}
-              style={styles.dragHandleArea}
+              style={styles.payButton}
+              onPress={() => navigation.navigate('Payment')}
+              activeOpacity={0.85}
             >
-              <View style={styles.bottomSheetIndicator} />
+              <Text style={styles.payButtonText}>Pay Now</Text>
             </TouchableOpacity>
-
-            <View style={styles.bottomSheetContent}>
-              {/* Collapsed top bar summary info */}
-              <View style={styles.bottomSheetHeader}>
-                <View>
-                  <Text style={styles.sheetChildName}>{child.name}</Text>
-                  <Text style={styles.sheetSubText}>
-                    Grade {child.grade} • Bus {busLocation.bus?.busNumber || 'N/A'}
-                  </Text>
-                </View>
-
-                {/* Trial Expiry Badge if on trial */}
-                {feeStatus.status === 'TRIAL' && (
-                  <View style={styles.trialBadge}>
-                    <Text style={styles.trialBadgeText}>
-                      Trial: {feeStatus.daysLeft}d left
-                    </Text>
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.sheetDivider} />
-
-              {/* Extended Details */}
-              <View style={styles.sheetBody}>
-                {/* Stop Info Row */}
-                <View style={styles.infoRow}>
-                  <View style={styles.infoIconWrapper}>
-                    <Text style={styles.infoRowEmoji}>📍</Text>
-                  </View>
-                  <View style={styles.infoTextWrapper}>
-                    <Text style={styles.infoRowTitle}>Assigned Stop</Text>
-                    <Text style={styles.infoRowVal} numberOfLines={1}>
-                      {child.stopLocation.label}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Driver Info Row */}
-                <View style={styles.infoRow}>
-                  <View style={styles.infoIconWrapper}>
-                    <Text style={styles.infoRowEmoji}>👤</Text>
-                  </View>
-                  <View style={styles.infoTextWrapper}>
-                    <Text style={styles.infoRowTitle}>Driver</Text>
-                    <Text style={styles.infoRowVal}>
-                      {loadingDriver
-                        ? 'Fetching details...'
-                        : driverInfo
-                          ? driverInfo.name
-                          : 'Not assigned'}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Contact Button */}
-                {driverInfo && (
-                  <TouchableOpacity
-                    style={styles.callDriverButton}
-                    onPress={handleCallDriver}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.callDriverEmoji}>📞</Text>
-                    <Text style={styles.callDriverButtonText}>Call Driver</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </Animated.View>
-        )}
-      </View>
+          </View>
+        </View>
+      )}
     </View>
   );
 };
@@ -556,404 +440,248 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  loadingContainer: {
-    flex: 1,
+  center: {
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.background,
   },
   loadingText: {
     marginTop: 12,
     fontSize: 15,
-    fontWeight: '600',
     color: Colors.textSecondary,
+    fontWeight: '600',
+  },
+  noStudentText: {
+    fontSize: 16,
+    color: Colors.textSecondary,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingHorizontal: 32,
   },
   map: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  // Paywall lock screen styles
-  lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+  busMarker: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  busMarkerText: {
+    fontSize: 20,
+    color: '#ffffff',
+  },
+  etaPill: {
+    position: 'absolute',
+    top: 48,
+    alignSelf: 'center',
+    backgroundColor: '#000000',
+    borderRadius: 999,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    zIndex: 10,
+  },
+  etaText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  childInfoCard: {
+    position: 'absolute',
+    bottom: 32,
+    left: 16,
+    right: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    zIndex: 10,
+  },
+  childName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  childGrade: {
+    fontSize: 14,
+    color: '#888888',
+    marginTop: 2,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#eeeeee',
+    marginVertical: 12,
+  },
+  driverLabel: {
+    fontSize: 12,
+    color: '#888888',
+    textTransform: 'uppercase',
+    fontWeight: '600',
+  },
+  driverName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#000000',
+    marginTop: 2,
+  },
+  callButton: {
+    backgroundColor: '#000000',
+    borderRadius: 999,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
+    elevation: 2,
+  },
+  callButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  nextStopContainer: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  nextStopLabel: {
+    fontSize: 14,
+    color: '#888888',
+    fontWeight: '600',
+  },
+  nextStopName: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  paywallOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
+    zIndex: 20,
   },
   paywallCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 24,
-    padding: 32,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 24,
     width: '100%',
     alignItems: 'center',
-    elevation: 8,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-  },
-  paywallIcon: {
-    fontSize: 54,
-    marginBottom: 16,
+    elevation: 10,
   },
   paywallTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#000000',
+    marginBottom: 8,
+  },
+  paywallBody: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 16,
+  },
+  paywallAmount: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#000000',
+    marginBottom: 20,
+  },
+  payButton: {
+    backgroundColor: '#000000',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 999,
+    width: '100%',
+    alignItems: 'center',
+  },
+  payButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  logoutButton: {
+    position: 'absolute',
+    top: 48,
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    zIndex: 999,
+  },
+  logoutButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  addChildButton: {
+    backgroundColor: '#000000',
+    borderRadius: 999,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    marginTop: 16,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3.84,
+  },
+  addChildButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  warningIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#fff3cd',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  warningEmoji: {
+    fontSize: 40,
+  },
+  unlinkedTitle: {
     fontSize: 22,
     fontWeight: '800',
     color: Colors.dark,
-    marginBottom: 10,
+    marginBottom: 12,
     textAlign: 'center',
   },
-  paywallSubtitle: {
-    fontSize: 14,
+  unlinkedSubtitle: {
+    fontSize: 15,
     color: Colors.textSecondary,
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 24,
-  },
-  priceContainer: {
-    backgroundColor: Colors.background,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  priceLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    marginBottom: 4,
-  },
-  priceValue: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: Colors.primary,
-  },
-  payNowButton: {
-    width: '100%',
-    height: 54,
-    backgroundColor: Colors.error,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-    shadowColor: Colors.error,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-  },
-  payNowButtonText: {
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  logoutButtonLink: {
-    marginTop: 16,
-    paddingVertical: 8,
-  },
-  logoutButtonTextLink: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    fontWeight: '600',
-    textDecorationLine: 'underline',
-  },
-  // Map Markers
-  markerContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.white,
-    borderWidth: 3,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-  },
-  markerEmoji: {
-    fontSize: 20,
-  },
-  // Floating overlay containers
-  topContainer: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 54 : 40,
-    left: 16,
-    right: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    elevation: 4,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  welcomeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  parentName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: Colors.dark,
-    marginTop: 2,
-  },
-  notificationBell: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  bellEmoji: {
-    fontSize: 20,
-  },
-  badge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    backgroundColor: Colors.error,
-    borderRadius: 9,
-    width: 18,
-    height: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  badgeText: {
-    color: Colors.white,
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  // Child selector chips
-  childSelectorContainer: {
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    paddingTop: 12,
-  },
-  childSelectorScroll: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  childChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    backgroundColor: Colors.background,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginRight: 8,
-  },
-  childChipActive: {
-    backgroundColor: Colors.primaryFaded,
-    borderColor: Colors.primary,
-  },
-  childChipEmoji: {
-    fontSize: 16,
-    marginRight: 6,
-  },
-  childChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-  },
-  childChipTextActive: {
-    color: Colors.primary,
-  },
-  addChildChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addChildChipText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  // Floating ETA Pill
-  etaPillContainer: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 190 : 170,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  etaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 24,
-    elevation: 4,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-  },
-  etaActive: {
-    backgroundColor: Colors.dark,
-  },
-  etaInactive: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  etaDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 10,
-  },
-  etaText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Colors.white,
-  },
-  // Bottom Sheet
-  customBottomSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 340,
-    backgroundColor: Colors.white,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    elevation: 10,
-    shadowColor: Colors.black,
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    paddingBottom: 20,
-  },
-  dragHandleArea: {
-    width: '100%',
-    height: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  bottomSheetIndicator: {
-    backgroundColor: Colors.textTertiary,
-    width: 44,
-    height: 4,
-    borderRadius: 2,
-  },
-  bottomSheetContent: {
-    paddingHorizontal: 24,
-    paddingTop: 4,
-  },
-  bottomSheetHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingBottom: 16,
-  },
-  sheetChildName: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: Colors.dark,
-  },
-  sheetSubText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  trialBadge: {
-    backgroundColor: Colors.warningFaded,
-    borderColor: Colors.warning,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  trialBadgeText: {
-    color: Colors.warning,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  sheetDivider: {
-    height: 1,
-    backgroundColor: Colors.divider,
-    marginBottom: 18,
-  },
-  sheetBody: {
-    gap: 16,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  infoIconWrapper: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: Colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  infoRowEmoji: {
-    fontSize: 18,
-  },
-  infoTextWrapper: {
-    flex: 1,
-  },
-  infoRowTitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.textTertiary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  infoRowVal: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.dark,
-    marginTop: 2,
-  },
-  callDriverButton: {
-    flexDirection: 'row',
-    height: 50,
-    backgroundColor: Colors.primary,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 8,
-    gap: 8,
-    elevation: 3,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-  },
-  callDriverEmoji: {
-    fontSize: 18,
-  },
-  callDriverButtonText: {
-    color: Colors.white,
-    fontSize: 15,
-    fontWeight: '700',
   },
 });
 

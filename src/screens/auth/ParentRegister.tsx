@@ -16,10 +16,13 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
 import CouponInput from '../../components/CouponInput';
 import { useCoupon } from '../../hooks/useCoupon';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../services/firebase';
 
 interface ParentRegisterProps {
   navigation: any;
@@ -33,6 +36,19 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
   const [grade, setGrade] = useState('');
   const [selectedGender, setSelectedGender] = useState<string>('Male');
   const [operatorCode, setOperatorCode] = useState('');
+
+  const [operatorId, setOperatorId] = useState('');
+  const [operatorName, setOperatorName] = useState('');
+  const [buses, setBuses] = useState<any[]>([]);
+  const [selectedBusId, setSelectedBusId] = useState('');
+  const [selectedBusNumber, setSelectedBusNumber] = useState('');
+  const [stops, setStops] = useState<any[]>([]);
+  const [selectedStopIndex, setSelectedStopIndex] = useState(-1);
+  const [selectedStopName, setSelectedStopName] = useState('');
+  const [selectedStopLat, setSelectedStopLat] = useState(0);
+  const [selectedStopLng, setSelectedStopLng] = useState(0);
+  const [isVerifyingOperator, setIsVerifyingOperator] = useState(false);
+  const [operatorError, setOperatorError] = useState('');
 
   const coupon = useCoupon();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -50,7 +66,83 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     phone.trim().length >= 10 &&
     childName.trim() &&
     grade.trim() &&
-    operatorCode.trim();
+    operatorCode.trim() &&
+    operatorId !== '' &&
+    selectedBusId !== '' &&
+    selectedStopIndex !== -1;
+
+  const verifyOperator = async () => {
+    if (!operatorCode.trim()) return;
+    setIsVerifyingOperator(true);
+    setOperatorError('');
+    setOperatorName('');
+    setOperatorId('');
+    setBuses([]);
+    setSelectedBusId('');
+    setStops([]);
+    setSelectedStopIndex(-1);
+
+    try {
+      const opQ = query(
+        collection(db, 'operators'),
+        where('code', '==', operatorCode.trim().toUpperCase())
+      );
+      const opSnap = await getDocs(opQ);
+
+      if (opSnap.empty) {
+        setOperatorError('Invalid operator code. Please check and try again.');
+        setIsVerifyingOperator(false);
+        return;
+      }
+
+      const opDoc = opSnap.docs[0];
+      const opId = opDoc.id;
+      const opData = opDoc.data() as any;
+
+      setOperatorId(opId);
+      setOperatorName(opData.name || '');
+
+      const busQ = query(
+        collection(db, 'buses'),
+        where('operatorId', '==', opId),
+        where('shift', '==', 'morning')
+      );
+      const busSnap = await getDocs(busQ);
+
+      const fetchedBuses = busSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setBuses(fetchedBuses);
+    } catch (err) {
+      console.error('Verify Operator Error:', err);
+      setOperatorError('Failed to verify operator. Please try again.');
+    } finally {
+      setIsVerifyingOperator(false);
+    }
+  };
+
+  const handleBusSelection = (busId: string) => {
+    setSelectedBusId(busId);
+    setSelectedStopIndex(-1);
+    setSelectedStopName('');
+    
+    const bus = buses.find(b => b.id === busId);
+    if (bus) {
+      setSelectedBusNumber(bus.busNumber);
+      setStops(bus.stops || []);
+    } else {
+      setSelectedBusNumber('');
+      setStops([]);
+    }
+  };
+
+  const handleStopSelection = (index: number) => {
+    setSelectedStopIndex(index);
+    const stop = stops[index];
+    if (stop) {
+      setSelectedStopName(stop.name || '');
+      setSelectedStopLat(stop.lat || 0);
+      setSelectedStopLng(stop.lng || 0);
+    }
+  };
 
   const handleContinue = () => {
     navigation.navigate('OTPVerify', {
@@ -64,6 +156,14 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
         grade,
         gender: selectedGender,
         operatorCode,
+        operatorId,
+        operatorName,
+        selectedBusId,
+        selectedBusNumber,
+        selectedStopIndex,
+        selectedStopName,
+        selectedStopLat,
+        selectedStopLng,
         couponCode: coupon.code,
       },
     });
@@ -227,11 +327,57 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
                 style={styles.input}
                 value={operatorCode}
                 onChangeText={(text) => setOperatorCode(text.toUpperCase())}
+                onBlur={verifyOperator}
                 placeholder="e.g. SAFERIDE"
                 placeholderTextColor={Colors.textTertiary}
                 autoCapitalize="characters"
               />
+              {isVerifyingOperator && <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: 8 }} />}
+              {operatorError ? <Text style={styles.errorText}>{operatorError}</Text> : null}
+              {operatorName ? <Text style={styles.successText}>✓ {operatorName}</Text> : null}
             </View>
+
+            {operatorId ? (
+              <View style={styles.field}>
+                <Text style={styles.label}>Select Bus</Text>
+                {buses.length === 0 ? (
+                  <Text style={styles.hint}>No morning buses found.</Text>
+                ) : (
+                  buses.map((bus) => (
+                    <TouchableOpacity
+                      key={bus.id}
+                      style={[styles.input, styles.selectionItem, selectedBusId === bus.id && styles.selectionItemActive]}
+                      onPress={() => handleBusSelection(bus.id)}
+                    >
+                      <Text style={[styles.selectionText, selectedBusId === bus.id && styles.selectionTextActive]}>
+                        {bus.busNumber} {bus.routeName ? `— ${bus.routeName}` : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            ) : null}
+
+            {selectedBusId ? (
+              <View style={styles.field}>
+                <Text style={styles.label}>Select Stop</Text>
+                {stops.length === 0 ? (
+                  <Text style={styles.hint}>No stops defined for this bus.</Text>
+                ) : (
+                  stops.map((stop, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={[styles.input, styles.selectionItem, selectedStopIndex === index && styles.selectionItemActive]}
+                      onPress={() => handleStopSelection(index)}
+                    >
+                      <Text style={[styles.selectionText, selectedStopIndex === index && styles.selectionTextActive]}>
+                        {stop.name || `Stop ${index + 1}`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            ) : null}
 
             <CouponInput
               value={coupon.code}
@@ -444,6 +590,34 @@ const styles = StyleSheet.create({
     color: Colors.white,
     fontSize: 18,
     fontWeight: '300',
+  },
+  selectionItem: {
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  selectionItemActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryFaded,
+  },
+  selectionText: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    fontWeight: '500',
+  },
+  selectionTextActive: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  errorText: {
+    color: Colors.error,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  successText: {
+    color: Colors.success,
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
   },
 });
 

@@ -33,16 +33,7 @@ export function AppNavigator() {
     );
   }
 
-  // Determine initial route based on auth state
-  const initialRoute = !user
-    ? 'Welcome'
-    : role === 'driver'
-      ? 'DriverTabs'
-      : role === 'parent'
-        ? 'ParentTabs'
-        : role === 'operator'
-          ? 'OperatorTabs'
-          : 'Welcome';
+
 
   return (
     <NavigationContainer>
@@ -51,30 +42,41 @@ export function AppNavigator() {
           headerShown: false,
           animation: 'slide_from_right',
         }}
-        initialRouteName={initialRoute}
       >
-        {/* Auth Flow */}
-        <RootStack.Screen name="Welcome" component={WelcomeScreen} />
-        <RootStack.Screen name="DriverRegister" component={DriverRegister} />
-        <RootStack.Screen name="ParentRegister" component={ParentRegister} />
-        <RootStack.Screen name="OTPVerify" component={OTPVerify} />
-
-        {/* Role-based Main Flows */}
-        <RootStack.Screen
-          name="DriverTabs"
-          component={DriverStack}
-          options={{ animation: 'fade' }}
-        />
-        <RootStack.Screen
-          name="ParentTabs"
-          component={ParentStack}
-          options={{ animation: 'fade' }}
-        />
-        <RootStack.Screen
-          name="OperatorTabs"
-          component={OperatorStack}
-          options={{ animation: 'fade' }}
-        />
+        {!user || !role ? (
+          <>
+            {/* Auth Flow */}
+            <RootStack.Screen name="Welcome" component={WelcomeScreen} />
+            <RootStack.Screen name="DriverRegister" component={DriverRegister} />
+            <RootStack.Screen name="ParentRegister" component={ParentRegister} />
+            <RootStack.Screen name="OTPVerify" component={OTPVerify} />
+          </>
+        ) : (
+          <>
+            {/* Role-based Main Flows */}
+            {role === 'driver' && (
+              <RootStack.Screen
+                name="DriverTabs"
+                component={DriverStack}
+                options={{ animation: 'fade' }}
+              />
+            )}
+            {role === 'parent' && (
+              <RootStack.Screen
+                name="ParentTabs"
+                component={ParentStack}
+                options={{ animation: 'fade' }}
+              />
+            )}
+            {role === 'operator' && (
+              <RootStack.Screen
+                name="OperatorTabs"
+                component={OperatorStack}
+                options={{ animation: 'fade' }}
+              />
+            )}
+          </>
+        )}
       </RootStack.Navigator>
     </NavigationContainer>
   );

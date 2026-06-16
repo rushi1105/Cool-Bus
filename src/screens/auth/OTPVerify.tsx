@@ -214,6 +214,7 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
             phone: registrationData.phone,
             operatorId: registrationData.operatorId,
             busNumber: registrationData.busNumber,
+            busId: registrationData.busId,
             shift: registrationData.shift,
           });
           navigateToRoleStack('driver');
@@ -226,6 +227,14 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
             grade: registrationData.grade,
             gender: registrationData.gender,
             operatorCode: registrationData.operatorCode,
+            operatorId: registrationData.operatorId,
+            busId: registrationData.selectedBusId,
+            stopOrder: registrationData.selectedStopIndex,
+            stopLocation: {
+              latitude: registrationData.selectedStopLat,
+              longitude: registrationData.selectedStopLng,
+              label: registrationData.selectedStopName,
+            },
           });
           navigateToRoleStack('parent');
         }
