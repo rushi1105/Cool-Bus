@@ -13,9 +13,6 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.bustrack.app",
-      "config": {
-        "googleMapsApiKey": "AIzaSyCdNfrFNl-10WisqZpnzViFauHWyxN4VRo"
-      },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Allow BusTrack to use your location to track bus position.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "CoolBus needs your location to track bus routes even when your screen is off.",
@@ -28,11 +25,6 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyCdNfrFNl-10WisqZpnzViFauHWyxN4VRo"
-        }
       },
       "package": "com.bustrack.app",
       "permissions": [
