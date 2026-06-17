@@ -6,6 +6,7 @@
  */
 
 import * as Location from 'expo-location';
+import { Platform } from 'react-native';
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -25,8 +26,14 @@ export async function requestLocationPermissions(): Promise<boolean> {
   try {
     const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
     if (fgStatus !== 'granted') return false;
-    const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-    return bgStatus === 'granted';
+
+    // Background tracking is only requested/required on Android for the MVP scope
+    if (Platform.OS === 'android') {
+      const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+      return bgStatus === 'granted';
+    }
+
+    return true;
   } catch (err) {
     console.error('[Location] Permission error:', err);
     return false;

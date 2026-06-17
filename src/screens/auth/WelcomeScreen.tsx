@@ -1,62 +1,27 @@
 /**
  * WelcomeScreen
  *
- * Entry point — choose Driver or Parent role.
- * Clean, professional with two large cards.
+ * Entry point — login is the primary action.
+ * Registration (choosing parent/driver role) is conditionally rendered.
+ * Clean, modern layout matching the application styling tokens.
  */
 
-import React, { useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Animated,
   StatusBar,
-  Dimensions,
 } from 'react-native';
 import Colors from '../../constants/colors';
-
-const { width } = Dimensions.get('window');
 
 interface WelcomeScreenProps {
   navigation: any;
 }
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ navigation }) => {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(40)).current;
-  const card1Anim = useRef(new Animated.Value(0)).current;
-  const card2Anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.stagger(200, [
-      Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 600,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 600,
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.spring(card1Anim, {
-        toValue: 1,
-        tension: 40,
-        friction: 7,
-        useNativeDriver: true,
-      }),
-      Animated.spring(card2Anim, {
-        toValue: 1,
-        tension: 40,
-        friction: 7,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
+  const [showRoleSelection, setShowRoleSelection] = useState(false);
 
   return (
     <View style={styles.container}>
@@ -66,115 +31,128 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ navigation }) => {
       <View style={styles.bgCircle1} />
       <View style={styles.bgCircle2} />
 
-      {/* Logo Section */}
-      <Animated.View
-        style={[
-          styles.logoSection,
-          { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
-        ]}
-      >
-        <View style={styles.logoContainer}>
-          <Text style={styles.logoIcon}>🚌</Text>
-          <View style={styles.logoPulse} />
+      {!showRoleSelection ? (
+        /* WELCOME VIEW (Log In is primary) */
+        <View style={styles.welcomeView}>
+          {/* Logo Section */}
+          <View style={styles.logoSection}>
+            <View style={styles.logoContainer}>
+              <Text style={styles.logoIcon}>🚌</Text>
+              <View style={styles.logoPulse} />
+            </View>
+            <Text style={styles.appName}>BusTrack</Text>
+            <Text style={styles.tagline}>
+              Real-time school bus tracking for{"\n"}parents and drivers
+            </Text>
+          </View>
+
+          {/* Actions */}
+          <View style={styles.actionsContainer}>
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={() => navigation.navigate('Login')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.primaryButtonText}>Log In</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.secondaryLink}
+              onPress={() => setShowRoleSelection(true)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.secondaryText}>
+                Don't have an account?{" "}
+                <Text style={styles.secondaryLinkText}>Create Account</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        <Text style={styles.appName}>BusTrack</Text>
-        <Text style={styles.tagline}>
-          Real-time school bus tracking for{'\n'}parents and drivers
-        </Text>
-      </Animated.View>
-
-      {/* Role Selection Cards */}
-      <View style={styles.cardsContainer}>
-        <Animated.View
-          style={{
-            opacity: card1Anim,
-            transform: [
-              {
-                translateY: card1Anim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [60, 0],
-                }),
-              },
-            ],
-          }}
-        >
+      ) : (
+        /* ROLE SELECTION VIEW (For Registration) */
+        <View style={styles.roleSelectionView}>
+          {/* Back Button */}
           <TouchableOpacity
-            style={[styles.roleCard, styles.driverCard]}
-            onPress={() => navigation.navigate('DriverRegister')}
-            activeOpacity={0.85}
+            style={styles.backButton}
+            onPress={() => setShowRoleSelection(false)}
+            activeOpacity={0.7}
           >
-            <View style={styles.cardContent}>
-              <View style={[styles.cardIcon, { backgroundColor: Colors.primaryFaded }]}>
-                <Text style={styles.cardEmoji}>🚗</Text>
-              </View>
-              <View style={styles.cardText}>
-                <Text style={styles.cardTitle}>I am a Driver</Text>
-                <Text style={styles.cardDescription}>
-                  Manage trips, track routes, and connect with your operator
-                </Text>
-              </View>
-              <Text style={styles.cardArrow}>→</Text>
-            </View>
-            <View style={[styles.cardAccent, { backgroundColor: Colors.primary }]} />
+            <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-        </Animated.View>
 
-        <Animated.View
-          style={{
-            opacity: card2Anim,
-            transform: [
-              {
-                translateY: card2Anim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [60, 0],
-                }),
-              },
-            ],
-          }}
-        >
-          <TouchableOpacity
-            style={[styles.roleCard, styles.parentCard]}
-            onPress={() => navigation.navigate('ParentRegister')}
-            activeOpacity={0.85}
-          >
-            <View style={styles.cardContent}>
-              <View style={[styles.cardIcon, { backgroundColor: Colors.successFaded }]}>
-                <Text style={styles.cardEmoji}>👨‍👩‍👧</Text>
-              </View>
-              <View style={styles.cardText}>
-                <Text style={styles.cardTitle}>I am a Parent</Text>
-                <Text style={styles.cardDescription}>
-                  Track your child's bus in real-time and manage payments
-                </Text>
-              </View>
-              <Text style={styles.cardArrow}>→</Text>
-            </View>
-            <View style={[styles.cardAccent, { backgroundColor: Colors.success }]} />
-          </TouchableOpacity>
-        </Animated.View>
-      </View>
+          <View style={styles.roleHeader}>
+            <Text style={styles.roleTitle}>Create Account</Text>
+            <Text style={styles.roleSubtitle}>
+              Choose your role to get started
+            </Text>
+          </View>
 
-      {/* Operator Login Link */}
-      <Animated.View
-        style={[styles.operatorLink, { opacity: card2Anim }]}
-      >
-        <TouchableOpacity
-          onPress={() => navigation.navigate('OperatorTabs')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.operatorText}>
-            Are you an operator?{' '}
-            <Text style={styles.operatorLinkText}>Login here</Text>
-          </Text>
-        </TouchableOpacity>
-      </Animated.View>
+          {/* Role Selection Cards */}
+          <View style={styles.cardsContainer}>
+            <TouchableOpacity
+              style={[styles.roleCard, styles.driverCard]}
+              onPress={() => navigation.navigate('DriverRegister')}
+              activeOpacity={0.85}
+            >
+              <View style={styles.cardContent}>
+                <View
+                  style={[
+                    styles.cardIcon,
+                    { backgroundColor: Colors.primaryFaded },
+                  ]}
+                >
+                  <Text style={styles.cardEmoji}>🚗</Text>
+                </View>
+                <View style={styles.cardText}>
+                  <Text style={styles.cardTitle}>I am a Driver</Text>
+                  <Text style={styles.cardDescription}>
+                    Manage trips, track routes, and connect with your operator
+                  </Text>
+                </View>
+                <Text style={styles.cardArrow}>→</Text>
+              </View>
+              <View
+                style={[styles.cardAccent, { backgroundColor: Colors.primary }]}
+              />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.roleCard, styles.parentCard]}
+              onPress={() => navigation.navigate('ParentRegister')}
+              activeOpacity={0.85}
+            >
+              <View style={styles.cardContent}>
+                <View
+                  style={[
+                    styles.cardIcon,
+                    { backgroundColor: Colors.successFaded },
+                  ]}
+                >
+                  <Text style={styles.cardEmoji}>👨‍👩‍👧</Text>
+                </View>
+                <View style={styles.cardText}>
+                  <Text style={styles.cardTitle}>I am a Parent</Text>
+                  <Text style={styles.cardDescription}>
+                    Track your child's school bus in real-time and manage
+                    payments
+                  </Text>
+                </View>
+                <Text style={styles.cardArrow}>→</Text>
+              </View>
+              <View
+                style={[styles.cardAccent, { backgroundColor: Colors.success }]}
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Footer */}
-      <Animated.View style={[styles.footer, { opacity: card2Anim }]}>
+      <View style={styles.footer}>
         <Text style={styles.footerText}>
           By continuing, you agree to our Terms of Service
         </Text>
-      </Animated.View>
+      </View>
     </View>
   );
 };
@@ -203,10 +181,14 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     backgroundColor: Colors.successFaded,
   },
+  welcomeView: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingBottom: 40,
+  },
   logoSection: {
     alignItems: 'center',
-    marginTop: 80,
-    marginBottom: 40,
+    marginBottom: 60,
   },
   logoContainer: {
     width: 80,
@@ -246,6 +228,69 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
     lineHeight: 22,
+  },
+  actionsContainer: {
+    gap: 16,
+    width: '100%',
+    alignItems: 'center',
+  },
+  primaryButton: {
+    width: '100%',
+    height: 56,
+    backgroundColor: Colors.primary,
+    borderRadius: 999,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  primaryButtonText: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  secondaryLink: {
+    paddingVertical: 8,
+  },
+  secondaryText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  secondaryLinkText: {
+    color: Colors.primary,
+    fontWeight: '700',
+  },
+  roleSelectionView: {
+    flex: 1,
+    paddingTop: 60,
+  },
+  backButton: {
+    paddingVertical: 8,
+    alignSelf: 'flex-start',
+    marginBottom: 24,
+  },
+  backButtonText: {
+    fontSize: 15,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  roleHeader: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  roleTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: Colors.dark,
+    marginBottom: 8,
+  },
+  roleSubtitle: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
   },
   cardsContainer: {
     gap: 16,
@@ -300,18 +345,6 @@ const styles = StyleSheet.create({
   },
   cardAccent: {
     height: 4,
-  },
-  operatorLink: {
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  operatorText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-  },
-  operatorLinkText: {
-    color: Colors.primary,
-    fontWeight: '600',
   },
   footer: {
     position: 'absolute',

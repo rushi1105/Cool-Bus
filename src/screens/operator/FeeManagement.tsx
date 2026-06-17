@@ -77,7 +77,7 @@ export const FeeManagement: React.FC<FeeManagementProps> = ({ navigation }) => {
                   </View>
                   <View>
                     <Text style={styles.studentName}>{sf.name}</Text>
-                    <Text style={styles.studentGrade}>Grade {sf.grade} • {sf.stopLocation.label}</Text>
+                    <Text style={styles.studentGrade}>Grade {sf.grade} • {sf.stopLocation?.label || 'No stop'}</Text>
                   </View>
                 </View>
                 <View style={styles.studentRight}>

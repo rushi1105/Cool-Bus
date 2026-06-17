@@ -27,6 +27,7 @@ import {
 import {
   signInWithCredential,
   PhoneAuthProvider,
+  signOut,
   type ConfirmationResult,
 } from 'firebase/auth';
 import FirebaseRecaptcha, {
@@ -46,6 +47,7 @@ const OTP_LENGTH = 6;
 
 export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
   const {
+    mode = 'register',
     role = 'parent',
     phone = '9876543210',
     registrationData,
@@ -53,6 +55,7 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
 
   const [otp, setOtp] = useState<string[]>(new Array(OTP_LENGTH).fill(''));
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [isSendingOTP, setIsSendingOTP] = useState(true);
   const [resendTimer, setResendTimer] = useState(30);
   const [error, setError] = useState('');
@@ -204,43 +207,55 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
       const existingUser = await getUserByUid(uid);
 
       if (existingUser) {
-        // Existing user — route to correct stack
-        navigateToRoleStack(existingUser.role);
+        // Treat as a valid login, let AppNavigator route automatically
+        return;
+      } else if (mode === 'login') {
+        // User does not exist, and we are in login mode
+        await signOut(auth);
+        Alert.alert('No Account Found', 'No account found. Please register first.');
+        navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+        return;
       } else if (registrationData) {
         // New user — create docs in Firestore
-        if (role === 'driver') {
-          await registerDriver(uid, {
-            name: registrationData.name,
-            phone: registrationData.phone,
-            operatorId: registrationData.operatorId,
-            busNumber: registrationData.busNumber,
-            busId: registrationData.busId,
-            shift: registrationData.shift,
-          });
-          navigateToRoleStack('driver');
-        } else if (role === 'parent') {
-          await registerParent(uid, {
-            parentName: registrationData.parentName,
-            phone: registrationData.phone,
-            email: registrationData.email || '',
-            childName: registrationData.childName,
-            grade: registrationData.grade,
-            gender: registrationData.gender,
-            operatorCode: registrationData.operatorCode,
-            operatorId: registrationData.operatorId,
-            busId: registrationData.selectedBusId,
-            stopOrder: registrationData.selectedStopIndex,
-            stopLocation: {
-              latitude: registrationData.selectedStopLat,
-              longitude: registrationData.selectedStopLng,
-              label: registrationData.selectedStopName,
-            },
-          });
-          navigateToRoleStack('parent');
+        setIsCreatingProfile(true);
+        try {
+          if (role === 'driver') {
+            await registerDriver(uid, {
+              name: registrationData.name,
+              phone: registrationData.phone,
+              operatorId: registrationData.operatorId,
+              busNumber: registrationData.busNumber,
+              busId: registrationData.busId,
+              shift: registrationData.shift,
+            });
+          } else if (role === 'parent') {
+            await registerParent(uid, {
+              parentName: registrationData.parentName,
+              phone: registrationData.phone,
+              email: registrationData.email || '',
+              childName: registrationData.childName,
+              grade: registrationData.grade,
+              gender: registrationData.gender,
+              operatorCode: registrationData.operatorCode,
+              operatorId: registrationData.operatorId,
+              busId: registrationData.selectedBusId,
+              stopOrder: registrationData.selectedStopIndex,
+              stopLocation: {
+                latitude: registrationData.selectedStopLat,
+                longitude: registrationData.selectedStopLng,
+                label: registrationData.selectedStopName,
+              },
+            });
+          }
+          // Do NOT manually navigate. Let AppNavigator handle it.
+        } catch (writeErr) {
+          console.error('Firestore write error during registration:', writeErr);
+          setError('Failed to create account profile. Please try again.');
+          setIsCreatingProfile(false);
         }
       } else {
         // Authenticated but no profile and no registration data
-        // This shouldn't happen in normal flow — send back to welcome
+        await signOut(auth);
         setError('Registration data missing. Please try again.');
         navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
       }
@@ -256,18 +271,6 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
       }
     } finally {
       setIsVerifying(false);
-    }
-  };
-
-  const navigateToRoleStack = (userRole: string) => {
-    if (userRole === 'driver') {
-      navigation.reset({ index: 0, routes: [{ name: 'DriverTabs' }] });
-    } else if (userRole === 'parent') {
-      navigation.reset({ index: 0, routes: [{ name: 'ParentTabs' }] });
-    } else if (userRole === 'operator') {
-      navigation.reset({ index: 0, routes: [{ name: 'OperatorTabs' }] });
-    } else {
-      navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
     }
   };
 
@@ -288,6 +291,16 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
   };
 
   const maskedPhone = `+91 ${phone.slice(0, 2)}****${phone.slice(-4)}`;
+
+  if (isCreatingProfile) {
+    return (
+      <View style={styles.loadingContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Setting up your account...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -529,6 +542,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.primary,
     fontWeight: '700',
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: Colors.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    color: Colors.textSecondary,
+    fontWeight: '500',
   },
 });
 

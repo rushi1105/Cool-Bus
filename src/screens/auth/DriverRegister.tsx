@@ -19,7 +19,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
-import { fetchOperators, fetchBusesByOperator, type Operator, type Bus } from '../../services/firebase';
+import { db, fetchOperators, fetchBusesByOperator, type Operator, type Bus } from '../../services/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import Config from '../../constants/config';
 
 interface DriverRegisterProps {
@@ -29,13 +30,71 @@ interface DriverRegisterProps {
 export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) => {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+
+  const [isCheckingPhone, setIsCheckingPhone] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const checkedPhoneRef = useRef('');
+
+  const checkPhoneNumber = async (phoneNumber: string) => {
+    if (phoneNumber.length !== 10) return;
+    if (phoneNumber === checkedPhoneRef.current) return;
+
+    checkedPhoneRef.current = phoneNumber;
+    setIsCheckingPhone(true);
+    setPhoneError('');
+
+    try {
+      const normalizedPhone = `+91${phoneNumber}`;
+      const q = query(
+        collection(db, 'users'),
+        where('phone', '==', normalizedPhone)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        setPhoneError('This phone number is already registered.\n\nUse Log In to access your account,\nor enter a different phone number.');
+      } else {
+        setPhoneError('');
+      }
+    } catch (err) {
+      console.error('[Register] Phone verification failed:', err);
+      setPhoneError('Unable to verify phone number');
+      checkedPhoneRef.current = '';
+    } finally {
+      setIsCheckingPhone(false);
+    }
+  };
+
+  const handlePhoneChange = (text: string) => {
+    const cleanText = text.replace(/[^0-9]/g, '');
+    setPhone(cleanText);
+
+    if (phoneError) {
+      setPhoneError('');
+    }
+    if (cleanText.length < 10) {
+      checkedPhoneRef.current = '';
+    }
+
+    if (cleanText.length === 10) {
+      checkPhoneNumber(cleanText);
+    }
+  };
+
+  const handlePhoneBlur = () => {
+    if (phone.length > 0 && phone.length < 10) {
+      setPhoneError('Please enter a valid 10-digit phone number.');
+      checkedPhoneRef.current = '';
+    } else if (phone.length === 10) {
+      checkPhoneNumber(phone);
+    }
+  };
   const [selectedOperator, setSelectedOperator] = useState<string | null>(null);
   const [busNumber, setBusNumber] = useState('');
   const [selectedShift, setSelectedShift] = useState<string>('Both');
   const [showOperatorPicker, setShowOperatorPicker] = useState(false);
   const [operators, setOperators] = useState<Operator[]>([]);
   const [loadingOperators, setLoadingOperators] = useState(true);
-  
+
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
   const [buses, setBuses] = useState<Bus[]>([]);
   const [loadingBuses, setLoadingBuses] = useState(false);
@@ -90,7 +149,13 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
     }
   }, [selectedOperator]);
 
-  const isFormValid = fullName.trim() && phone.trim().length >= 10 && selectedOperator && busNumber.trim();
+  const isFormValid =
+    fullName.trim() &&
+    phone.trim().length === 10 &&
+    selectedOperator &&
+    busNumber.trim() &&
+    !phoneError &&
+    !isCheckingPhone;
 
   const handleContinue = () => {
     navigation.navigate('OTPVerify', {
@@ -162,15 +227,23 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
                   <Text style={styles.countryCodeText}>🇮🇳 +91</Text>
                 </View>
                 <TextInput
-                  style={[styles.input, styles.phoneInput]}
+                  style={[styles.input, styles.phoneInput, phoneError ? styles.inputError : undefined]}
                   value={phone}
-                  onChangeText={setPhone}
+                  onChangeText={handlePhoneChange}
+                  onBlur={handlePhoneBlur}
                   placeholder="9876543210"
                   placeholderTextColor={Colors.textTertiary}
                   keyboardType="phone-pad"
                   maxLength={10}
                 />
               </View>
+              {isCheckingPhone && (
+                <View style={styles.phoneStatusRow}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.phoneStatusText}>Checking availability...</Text>
+                </View>
+              )}
+              {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
             </View>
 
             {/* Operator */}
@@ -562,6 +635,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.error,
     fontWeight: '600',
+  },
+  phoneStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  phoneStatusText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  errorText: {
+    color: Colors.error,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  inputError: {
+    borderColor: Colors.error,
   },
 });
 

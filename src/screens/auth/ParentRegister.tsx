@@ -23,6 +23,7 @@ import CouponInput from '../../components/CouponInput';
 import { useCoupon } from '../../hooks/useCoupon';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../services/firebase';
+import { validateEmail, validatePhone } from '../../utils/validation';
 
 interface ParentRegisterProps {
   navigation: any;
@@ -31,6 +32,77 @@ interface ParentRegisterProps {
 export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) => {
   const [parentName, setParentName] = useState('');
   const [phone, setPhone] = useState('');
+
+  const [isCheckingPhone, setIsCheckingPhone] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const checkedPhoneRef = useRef('');
+
+  // Per-field validation error states
+  const [parentNameError, setParentNameError] = useState('');
+  const [emailError, setEmailError] = useState('');
+  const [childNameError, setChildNameError] = useState('');
+  const [gradeError, setGradeError] = useState('');
+
+  const checkPhoneNumber = async (phoneNumber: string) => {
+    if (phoneNumber.length !== 10) {
+      setPhoneError('Enter valid 10-digit phone number');
+      return;
+    }
+    if (phoneNumber === checkedPhoneRef.current) return;
+
+    checkedPhoneRef.current = phoneNumber;
+    setIsCheckingPhone(true);
+    setPhoneError('');
+
+    try {
+      const normalizedPhone = `+91${phoneNumber}`;
+      const q = query(
+        collection(db, 'users'),
+        where('phone', '==', normalizedPhone)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        setPhoneError('This phone number is already registered.\n\nUse Log In to access your account,\nor enter a different phone number.');
+      } else {
+        setPhoneError('');
+      }
+    } catch (err) {
+      console.error('[Register] Phone verification failed:', err);
+      setPhoneError('Unable to verify phone number');
+      checkedPhoneRef.current = '';
+    } finally {
+      setIsCheckingPhone(false);
+    }
+  };
+
+  const handlePhoneChange = (text: string) => {
+    const cleanText = text.replace(/[^0-9]/g, '');
+    setPhone(cleanText);
+    
+    if (phoneError) {
+      setPhoneError('');
+    }
+    if (cleanText.length < 10) {
+      checkedPhoneRef.current = '';
+    }
+    
+    if (cleanText.length === 10) {
+      checkPhoneNumber(cleanText);
+    }
+  };
+
+  const handlePhoneBlur = () => {
+    if (phone.length === 0) {
+      setPhoneError('Enter valid 10-digit phone number');
+      checkedPhoneRef.current = '';
+    } else if (phone.length < 10) {
+      setPhoneError('Enter valid 10-digit phone number');
+      checkedPhoneRef.current = '';
+    } else if (phone.length === 10) {
+      checkPhoneNumber(phone);
+    }
+  };
+
   const [email, setEmail] = useState('');
   const [childName, setChildName] = useState('');
   const [grade, setGrade] = useState('');
@@ -39,6 +111,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
 
   const [operatorId, setOperatorId] = useState('');
   const [operatorName, setOperatorName] = useState('');
+  const [operatorVerified, setOperatorVerified] = useState(false);
   const [buses, setBuses] = useState<any[]>([]);
   const [selectedBusId, setSelectedBusId] = useState('');
   const [selectedBusNumber, setSelectedBusNumber] = useState('');
@@ -53,6 +126,70 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
   const coupon = useCoupon();
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
+  // New Per-Field Change and Blur Handlers
+  const handleParentNameChange = (text: string) => {
+    setParentName(text);
+    if (text.trim()) {
+      setParentNameError('');
+    }
+  };
+
+  const handleParentNameBlur = () => {
+    if (!parentName.trim()) {
+      setParentNameError('Name is required');
+    } else {
+      setParentNameError('');
+    }
+  };
+
+  const handleEmailChange = (text: string) => {
+    setEmail(text);
+    if (text.trim() && validateEmail(text)) {
+      setEmailError('');
+    }
+  };
+
+  const handleEmailBlur = () => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setEmailError('Email is required');
+    } else if (!validateEmail(trimmed)) {
+      setEmailError('Enter valid email address');
+    } else {
+      setEmailError('');
+    }
+  };
+
+  const handleChildNameChange = (text: string) => {
+    setChildName(text);
+    if (text.trim()) {
+      setChildNameError('');
+    }
+  };
+
+  const handleChildNameBlur = () => {
+    if (!childName.trim()) {
+      setChildNameError('Child name is required');
+    } else {
+      setChildNameError('');
+    }
+  };
+
+  const handleGradeChange = (text: string) => {
+    setGrade(text);
+    if (text.trim()) {
+      setGradeError('');
+    }
+  };
+
+  const handleGradeBlur = () => {
+    if (!grade.trim()) {
+      setGradeError('Grade is required');
+    } else {
+      setGradeError('');
+    }
+  };
+
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
@@ -61,15 +198,43 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     }).start();
   }, []);
 
-  const isFormValid =
-    parentName.trim() &&
-    phone.trim().length >= 10 &&
-    childName.trim() &&
-    grade.trim() &&
-    operatorCode.trim() &&
-    operatorId !== '' &&
-    selectedBusId !== '' &&
-    selectedStopIndex !== -1;
+  const [isFormValid, setIsFormValid] = useState(false);
+
+  useEffect(() => {
+    const isEmailValid = validateEmail(email);
+    const isPhoneValid = validatePhone(phone) && !phoneError && !isCheckingPhone;
+    const isOperatorValid = operatorVerified && operatorId !== '' && !operatorError && !isVerifyingOperator;
+    const isBusValid = selectedBusId !== '';
+    const isStopValid = selectedStopIndex !== -1;
+
+    const isValid = !!(
+      parentName.trim() &&
+      isPhoneValid &&
+      email.trim() &&
+      isEmailValid &&
+      childName.trim() &&
+      grade.trim() &&
+      isOperatorValid &&
+      isBusValid &&
+      isStopValid
+    );
+
+    setIsFormValid(isValid);
+  }, [
+    parentName,
+    phone,
+    email,
+    childName,
+    grade,
+    operatorVerified,
+    selectedBusId,
+    selectedStopIndex,
+    phoneError,
+    isCheckingPhone,
+    operatorId,
+    operatorError,
+    isVerifyingOperator,
+  ]);
 
   const verifyOperator = async () => {
     if (!operatorCode.trim()) return;
@@ -77,6 +242,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     setOperatorError('');
     setOperatorName('');
     setOperatorId('');
+    setOperatorVerified(false);
     setBuses([]);
     setSelectedBusId('');
     setStops([]);
@@ -92,6 +258,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
       if (opSnap.empty) {
         setOperatorError('Invalid operator code. Please check and try again.');
         setIsVerifyingOperator(false);
+        setOperatorVerified(false);
         return;
       }
 
@@ -101,11 +268,11 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
 
       setOperatorId(opId);
       setOperatorName(opData.name || '');
+      setOperatorVerified(true);
 
       const busQ = query(
         collection(db, 'buses'),
-        where('operatorId', '==', opId),
-        where('shift', '==', 'morning')
+        where('operatorId', '==', opId)
       );
       const busSnap = await getDocs(busQ);
 
@@ -114,6 +281,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     } catch (err) {
       console.error('Verify Operator Error:', err);
       setOperatorError('Failed to verify operator. Please try again.');
+      setOperatorVerified(false);
     } finally {
       setIsVerifyingOperator(false);
     }
@@ -221,12 +389,14 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
             <View style={styles.field}>
               <Text style={styles.label}>Full Name</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, parentNameError ? styles.inputError : undefined]}
                 value={parentName}
-                onChangeText={setParentName}
+                onChangeText={handleParentNameChange}
+                onBlur={handleParentNameBlur}
                 placeholder="Enter your full name"
                 placeholderTextColor={Colors.textTertiary}
               />
+              {parentNameError ? <Text style={styles.errorText}>{parentNameError}</Text> : null}
             </View>
 
             <View style={styles.field}>
@@ -236,28 +406,38 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
                   <Text style={styles.countryCodeText}>🇮🇳 +91</Text>
                 </View>
                 <TextInput
-                  style={[styles.input, styles.phoneInput]}
+                  style={[styles.input, styles.phoneInput, phoneError ? styles.inputError : undefined]}
                   value={phone}
-                  onChangeText={setPhone}
+                  onChangeText={handlePhoneChange}
+                  onBlur={handlePhoneBlur}
                   placeholder="9876543210"
                   placeholderTextColor={Colors.textTertiary}
                   keyboardType="phone-pad"
                   maxLength={10}
                 />
               </View>
+              {isCheckingPhone && (
+                <View style={styles.phoneStatusRow}>
+                  <ActivityIndicator size="small" color={Colors.primary} />
+                  <Text style={styles.phoneStatusText}>Checking availability...</Text>
+                </View>
+              )}
+              {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
             </View>
 
             <View style={styles.field}>
-              <Text style={styles.label}>Email (Optional)</Text>
+              <Text style={styles.label}>Email</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, emailError ? styles.inputError : undefined]}
                 value={email}
-                onChangeText={setEmail}
+                onChangeText={handleEmailChange}
+                onBlur={handleEmailBlur}
                 placeholder="parent@email.com"
                 placeholderTextColor={Colors.textTertiary}
                 keyboardType="email-address"
                 autoCapitalize="none"
               />
+              {emailError ? <Text style={styles.errorText}>{emailError}</Text> : null}
             </View>
           </View>
 
@@ -267,24 +447,28 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
             <View style={styles.field}>
               <Text style={styles.label}>Child Name</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, childNameError ? styles.inputError : undefined]}
                 value={childName}
-                onChangeText={setChildName}
+                onChangeText={handleChildNameChange}
+                onBlur={handleChildNameBlur}
                 placeholder="Enter child's name"
                 placeholderTextColor={Colors.textTertiary}
               />
+              {childNameError ? <Text style={styles.errorText}>{childNameError}</Text> : null}
             </View>
 
             <View style={styles.row}>
               <View style={[styles.field, { flex: 1 }]}>
                 <Text style={styles.label}>Grade</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, gradeError ? styles.inputError : undefined]}
                   value={grade}
-                  onChangeText={setGrade}
+                  onChangeText={handleGradeChange}
+                  onBlur={handleGradeBlur}
                   placeholder="e.g. 5th"
                   placeholderTextColor={Colors.textTertiary}
                 />
+                {gradeError ? <Text style={styles.errorText}>{gradeError}</Text> : null}
               </View>
               <View style={[styles.field, { flex: 2 }]}>
                 <Text style={styles.label}>Gender</Text>
@@ -326,7 +510,12 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
               <TextInput
                 style={styles.input}
                 value={operatorCode}
-                onChangeText={(text) => setOperatorCode(text.toUpperCase())}
+                onChangeText={(text) => {
+                  setOperatorCode(text.toUpperCase());
+                  setOperatorVerified(false);
+                  setOperatorId('');
+                  setOperatorName('');
+                }}
                 onBlur={verifyOperator}
                 placeholder="e.g. SAFERIDE"
                 placeholderTextColor={Colors.textTertiary}
@@ -341,7 +530,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
               <View style={styles.field}>
                 <Text style={styles.label}>Select Bus</Text>
                 {buses.length === 0 ? (
-                  <Text style={styles.hint}>No morning buses found.</Text>
+                  <Text style={styles.hint}>No buses found for this operator.</Text>
                 ) : (
                   buses.map((bus) => (
                     <TouchableOpacity
@@ -618,6 +807,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginTop: 4,
+  },
+  phoneStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  phoneStatusText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  inputError: {
+    borderColor: Colors.error,
   },
 });
 

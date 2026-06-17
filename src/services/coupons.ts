@@ -45,14 +45,8 @@ export const couponService = {
       return { valid: false, coupon: null, message: 'Coupon not found' };
     }
 
-    if (coupon.isUsed && (!phone || !coupon.usedByPhones?.includes(phone))) {
-       // If it's used but this phone isn't one of the users, then for this mock, let's say anyone can use a coupon multiple times, but NOT the same phone twice.
-       // Wait, if "rejects if already used by same phone number", it means:
-       // if phone is provided and usedByPhones includes it -> reject
-    }
-    
-    if (phone && coupon.usedByPhones?.includes(phone)) {
-      return { valid: false, coupon: null, message: 'This coupon was already used by this phone number' };
+    if (coupon.isUsed) {
+      return { valid: false, coupon: null, message: 'This coupon has already been used' };
     }
 
     if (new Date() > coupon.expiresAt) {

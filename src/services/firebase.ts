@@ -95,7 +95,7 @@ export interface Student {
   operatorId: string;
   grade: string;
   gender: 'Male' | 'Female' | 'Other';
-  stopLocation: { latitude: number; longitude: number; label: string };
+  stopLocation?: { latitude: number; longitude: number; label: string } | null;
   stopOrder?: number;
 }
 
@@ -118,7 +118,7 @@ export interface Coupon {
   operatorId: string;
   isUsed: boolean;
   usedBy?: string;
-  usedByPhones?: string[];
+  usedAt?: any;
   createdAt: Date;
   expiresAt: Date;
 }
@@ -560,7 +560,6 @@ export const mockCoupons: Coupon[] = [
     operatorId: 'op-1',
     isUsed: true,
     usedBy: 'par-1',
-    usedByPhones: ['+919876543210'],
     createdAt: new Date('2026-01-15'),
     expiresAt: new Date('2026-07-15'),
   },
@@ -569,7 +568,6 @@ export const mockCoupons: Coupon[] = [
     code: 'SAFERIDE-FREE-1002',
     operatorId: 'op-1',
     isUsed: false,
-    usedByPhones: [],
     createdAt: new Date('2026-03-10'),
     expiresAt: new Date('2026-09-10'),
   },
@@ -579,7 +577,6 @@ export const mockCoupons: Coupon[] = [
     operatorId: 'op-2',
     isUsed: true,
     usedBy: 'par-3',
-    usedByPhones: ['+918888888888'],
     createdAt: new Date('2026-02-20'),
     expiresAt: new Date('2026-08-20'),
   },
@@ -588,7 +585,6 @@ export const mockCoupons: Coupon[] = [
     code: 'SAFERIDE-FREE-1003',
     operatorId: 'op-1',
     isUsed: false,
-    usedByPhones: [],
     createdAt: new Date('2026-06-01'),
     expiresAt: new Date('2026-12-01'),
   },
@@ -777,23 +773,42 @@ export const firebaseService = {
   },
 
   validateCoupon: async (code: string): Promise<Coupon | null> => {
-    await delay(600);
-    const coupon = mockCoupons.find((c) => c.code === code);
-    return coupon ?? null;
+    try {
+      const q = query(
+        collection(db, 'coupons'),
+        where('code', '==', code.toUpperCase().trim())
+      );
+      const snap = await getDocs(q);
+      if (snap.empty) return null;
+      const docSnap = snap.docs[0];
+      const data = docSnap.data();
+      return {
+        id: docSnap.id,
+        code: data.code,
+        operatorId: data.operatorId,
+        isUsed: data.isUsed || false,
+        usedBy: data.usedBy,
+        usedAt: data.usedAt,
+        createdAt: data.createdAt instanceof Timestamp ? data.createdAt.toDate() : new Date(data.createdAt),
+        expiresAt: data.expiresAt instanceof Timestamp ? data.expiresAt.toDate() : new Date(data.expiresAt),
+      } as Coupon;
+    } catch (err) {
+      console.error('[Firebase] validateCoupon error:', err);
+      return null;
+    }
   },
 
   useCoupon: async (couponId: string, parentId: string, phone?: string): Promise<void> => {
-    await delay(500);
-    const coupon = mockCoupons.find((c) => c.id === couponId);
-    if (coupon) {
-      coupon.isUsed = true;
-      coupon.usedBy = parentId;
-      if (phone) {
-        coupon.usedByPhones = coupon.usedByPhones || [];
-        if (!coupon.usedByPhones.includes(phone)) {
-          coupon.usedByPhones.push(phone);
-        }
-      }
+    try {
+      const ref = doc(db, 'coupons', couponId);
+      await updateDoc(ref, {
+        isUsed: true,
+        usedBy: parentId,
+        usedAt: Timestamp.now(),
+      });
+    } catch (err) {
+      console.error('[Firebase] useCoupon error:', err);
+      throw err;
     }
   },
 

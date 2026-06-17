@@ -23,7 +23,7 @@ import { collection, query, where, getDocs, doc, getDoc, onSnapshot } from 'fire
 import { db, auth } from '../../services/firebase';
 import { signOut } from 'firebase/auth';
 import { useAuth } from '../../hooks/useAuth';
-import { calculateETA } from '../../services/location';
+import { calculateETA, getDistance } from '../../services/location';
 import Colors from '../../constants/colors';
 
 interface ParentHomeProps {
@@ -61,19 +61,37 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
 
     setIsLoading(true);
 
-    // 1. Query /students where parentId == uid (limit 1 for first child)
+    const timerFinishedRef = { current: false };
+    const studentFoundRef = { current: false };
+
+    // Start 3-second timer on mount
+    const timerId = setTimeout(() => {
+      timerFinishedRef.current = true;
+      if (!studentFoundRef.current) {
+        setIsLoading(false);
+      }
+    }, 3000);
+
+    // 1. Listen to /students in real time
     const studentQ = query(
       collection(db, 'students'),
       where('parentId', '==', user.uid)
     );
 
-    getDocs(studentQ).then(async (studentSnap) => {
+    let unsubscribeFees: (() => void) | null = null;
+
+    const unsubscribeStudents = onSnapshot(studentQ, (studentSnap) => {
       if (studentSnap.empty) {
+        studentFoundRef.current = false;
         setStudent(null);
-        setIsLoading(false);
+        setFeeStatus(null);
+        if (timerFinishedRef.current) {
+          setIsLoading(false);
+        }
         return;
       }
 
+      studentFoundRef.current = true;
       const studentDoc = studentSnap.docs[0];
       const studentData = { id: studentDoc.id, ...studentDoc.data() } as any;
       setStudent(studentData);
@@ -102,24 +120,39 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
         });
       }
 
-      // 2. Query /fees where parentId == uid and studentId == student.id limit 1
+      // 2. Query /fees where parentId == uid and studentId == student.id limit 1 in real time
       const feeQ = query(
         collection(db, 'fees'),
         where('parentId', '==', user.uid),
         where('studentId', '==', studentDoc.id)
       );
-      const feeSnap = await getDocs(feeQ);
-      let fStatus = 'TRIAL';
-      if (!feeSnap.empty) {
-        fStatus = feeSnap.docs[0].data().status || 'UNPAID';
-      }
-      setFeeStatus(fStatus);
 
-      setIsLoading(false);
-    }).catch((err) => {
-      console.error('[ParentHome] Load initial data error:', err);
+      if (unsubscribeFees) unsubscribeFees();
+
+      unsubscribeFees = onSnapshot(feeQ, (feeSnap) => {
+        let fStatus = 'TRIAL';
+        if (!feeSnap.empty) {
+          fStatus = feeSnap.docs[0].data().status || 'UNPAID';
+        }
+        setFeeStatus(fStatus);
+        setIsLoading(false);
+      }, (err) => {
+        console.error('[ParentHome] Fee stream error:', err);
+        setIsLoading(false);
+      });
+
+    }, (err) => {
+      console.error('[ParentHome] Student stream error:', err);
       setIsLoading(false);
     });
+
+    return () => {
+      clearTimeout(timerId);
+      unsubscribeStudents();
+      if (unsubscribeFees) {
+        unsubscribeFees();
+      }
+    };
   }, [user?.uid]);
 
   // Subscribe to /buses/{busId} only if fee status is NOT unpaid
@@ -203,7 +236,58 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     });
   }, [busLocation?.driverId]);
 
-  if (isLoading) {
+  const fitMapToRoute = () => {
+    if (!mapRef.current || !student?.stopLocation) return;
+    const coords: any[] = [];
+    
+    // Add student stop location
+    coords.push({
+      latitude: student.stopLocation.latitude,
+      longitude: student.stopLocation.longitude,
+    });
+
+    // Add current bus location if active and available
+    if (isActive && busLocation?.currentLocation) {
+      coords.push({
+        latitude: busLocation.currentLocation.latitude,
+        longitude: busLocation.currentLocation.longitude,
+      });
+    }
+
+    // Add route stops
+    if (busLocation?.stops && busLocation.stops.length > 0) {
+      busLocation.stops.forEach((s: any) => {
+        const sLat = s.latitude ?? s.lat;
+        const sLng = s.longitude ?? s.lng;
+        if (sLat && sLng) {
+          coords.push({ latitude: sLat, longitude: sLng });
+        }
+      });
+    }
+
+    if (coords.length > 0) {
+      mapRef.current.fitToCoordinates(coords, {
+        edgePadding: { top: 120, right: 60, bottom: 260, left: 60 },
+        animated: true,
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (busLocation && mapRef.current) {
+      const timer = setTimeout(() => {
+        fitMapToRoute();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [
+    busLocation?.currentLocation?.latitude,
+    busLocation?.currentLocation?.longitude,
+    isActive,
+    busLocation?.stops?.length,
+  ]);
+
+  if (isLoading || (student && feeStatus === null)) {
     return (
       <View style={[styles.container, styles.center]}>
         <StatusBar barStyle="dark-content" />
@@ -336,6 +420,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
           showsUserLocation={false}
           showsMyLocationButton={false}
           zoomControlEnabled={false}
+          onMapReady={fitMapToRoute}
         >
         {/* LAYER 2 — Bus marker (only visible if active) */}
         {isActive && busLocation?.currentLocation && (
@@ -350,17 +435,77 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
           </Marker.Animated>
         )}
 
-        {/* LAYER 3 — Stop marker (red pin) */}
-        {student.stopLocation && (
-          <Marker
-            coordinate={{
-              latitude: student.stopLocation.latitude,
-              longitude: student.stopLocation.longitude,
-            }}
-            pinColor="red"
-            title={student.stopLocation.label || `${student.name}'s Stop`}
-          />
-        )}
+        {/* Route stop markers */}
+        {busLocation?.stops &&
+          busLocation.stops.map((stop: any, index: number) => {
+            const stopId = stop.id || stop.name || index.toString();
+            const visitedList = busLocation.visitedStops || [];
+            const isVisited = visitedList.includes(stop.order);
+            const isNext = busLocation.stops.find((s: any) => !visitedList.includes(s.order))?.name === stop.name;
+            const stopLat = stop.latitude ?? stop.lat;
+            const stopLng = stop.longitude ?? stop.lng;
+
+            if (!stopLat || !stopLng) return null;
+
+            const isStudentStop = student.stopLocation && (
+              student.stopLocation.label === stop.name ||
+              getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
+            );
+
+            return (
+              <Marker
+                key={stopId}
+                coordinate={{
+                  latitude: stopLat,
+                  longitude: stopLng,
+                }}
+                title={stop.name}
+                description={isVisited ? 'Visited ✓' : isNext ? 'Next Stop' : ''}
+              >
+                <View
+                  style={[
+                    styles.stopMarker,
+                    isVisited && styles.stopMarkerVisited,
+                    isNext && styles.stopMarkerNext,
+                    isStudentStop && styles.stopMarkerStudent,
+                  ]}
+                >
+                  <Text style={styles.stopMarkerText}>
+                    {isVisited ? '✓' : isNext ? '●' : '○'}
+                  </Text>
+                </View>
+              </Marker>
+            );
+          })}
+
+        {/* Student Stop fallback marker (renders only if the student stop is not in the bus route stops) */}
+        {student.stopLocation && (() => {
+          const stopsList = busLocation?.stops || [];
+          const isStopInList = stopsList.some((stop: any) => {
+            const stopLat = stop.latitude ?? stop.lat;
+            const stopLng = stop.longitude ?? stop.lng;
+            return stopLat && stopLng && (
+              student.stopLocation.label === stop.name ||
+              getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
+            );
+          });
+
+          if (isStopInList) return null;
+
+          return (
+            <Marker
+              coordinate={{
+                latitude: student.stopLocation.latitude,
+                longitude: student.stopLocation.longitude,
+              }}
+              title={student.stopLocation.label || `${student.name}'s Stop`}
+            >
+              <View style={[styles.stopMarker, styles.stopMarkerStudent]}>
+                <Text style={styles.stopMarkerText}>○</Text>
+              </View>
+            </Marker>
+          );
+        })()}
       </MapView>
       )}
 
@@ -682,6 +827,34 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: 24,
+  },
+  stopMarker: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#ffffff',
+    elevation: 3,
+  },
+  stopMarkerVisited: {
+    backgroundColor: '#888888',
+  },
+  stopMarkerNext: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 4,
+  },
+  stopMarkerStudent: {
+    backgroundColor: Colors.success,
+  },
+  stopMarkerText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
   },
 });
 

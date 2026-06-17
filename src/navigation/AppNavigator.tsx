@@ -8,6 +8,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import WelcomeScreen from '../screens/auth/WelcomeScreen';
+import LoginScreen from '../screens/auth/LoginScreen';
 import DriverRegister from '../screens/auth/DriverRegister';
 import ParentRegister from '../screens/auth/ParentRegister';
 import OTPVerify from '../screens/auth/OTPVerify';
@@ -47,6 +48,7 @@ export function AppNavigator() {
           <>
             {/* Auth Flow */}
             <RootStack.Screen name="Welcome" component={WelcomeScreen} />
+            <RootStack.Screen name="Login" component={LoginScreen} />
             <RootStack.Screen name="DriverRegister" component={DriverRegister} />
             <RootStack.Screen name="ParentRegister" component={ParentRegister} />
             <RootStack.Screen name="OTPVerify" component={OTPVerify} />

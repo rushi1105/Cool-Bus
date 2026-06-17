@@ -15,6 +15,11 @@
       "bundleIdentifier": "com.bustrack.app",
       "config": {
         "googleMapsApiKey": "AIzaSyCdNfrFNl-10WisqZpnzViFauHWyxN4VRo"
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Allow BusTrack to use your location to track bus position.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "CoolBus needs your location to track bus routes even when your screen is off.",
+        "NSLocationAlwaysUsageDescription": "CoolBus needs your location to track bus routes even when your screen is off."
       }
     },
     "android": {

@@ -93,34 +93,44 @@ export const DriverHome: React.FC = () => {
     });
   }, [trackWidth, profile, user]);
 
-  // Get current location on mount (no Bangalore hardcoding)
+  // Get current location on mount if permission is already granted
   useEffect(() => {
-    Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced
-    }).then(position => {
-      setInitialRegion({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      });
-      setCurrentLocation({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-        heading: position.coords.heading ?? 0,
-        speed: 0,
-        accuracy: position.coords.accuracy ?? 0,
-      });
-    }).catch(err => {
-      console.error('[DriverHome] getCurrentPositionAsync error:', err);
-      // Fallback region (MH05 area)
+    const initializeLocation = async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const position = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          setInitialRegion({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          });
+          setCurrentLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            heading: position.coords.heading ?? 0,
+            speed: 0,
+            accuracy: position.coords.accuracy ?? 0,
+          });
+          return;
+        }
+      } catch (err) {
+        console.error('[DriverHome] Error checking location/permission:', err);
+      }
+
+      // Fallback region (MH05 area) if permission not granted or call fails
       setInitialRegion({
         latitude: 19.1873,
         longitude: 73.1927,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       });
-    });
+    };
+
+    initializeLocation();
   }, []);
 
   // Trip Elapsed Timer
