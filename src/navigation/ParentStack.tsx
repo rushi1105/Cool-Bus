@@ -13,6 +13,7 @@ import PaymentScreen from '../screens/parent/PaymentScreen';
 import TransactionHistory from '../screens/parent/TransactionHistory';
 import AddChild from '../screens/parent/AddChild';
 import NotificationsScreen from '../screens/parent/NotificationsScreen';
+import ParentProfile from '../screens/parent/ParentProfile';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -31,6 +32,7 @@ function ParentTabs() {
             Home: '🏠',
             Pay: '💳',
             History: '📜',
+            Profile: '👤',
           };
           return (
             <View style={[styles.tabIcon, focused && styles.tabIconActive]}>
@@ -43,6 +45,7 @@ function ParentTabs() {
       <Tab.Screen name="Home" component={ParentHome} />
       <Tab.Screen name="Pay" component={PaymentScreen} />
       <Tab.Screen name="History" component={TransactionHistory} />
+      <Tab.Screen name="Profile" component={ParentProfile} />
     </Tab.Navigator>
   );
 }
