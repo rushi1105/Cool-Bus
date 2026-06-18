@@ -36,6 +36,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
   // States
   const [student, setStudent] = useState<any>(null);
   const [feeStatus, setFeeStatus] = useState<string | null>(null);
+  const [routeInfo, setRouteInfo] = useState<any>(null);
   const [busLocation, setBusLocation] = useState<any>(null);
   const [driver, setDriver] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -96,19 +97,44 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
       const studentData = { id: studentDoc.id, ...studentDoc.data() } as any;
       setStudent(studentData);
 
-      // Set initial marker coordinate to stop location
-      if (studentData.stopLocation) {
-        markerCoord.setValue({
-          latitude: studentData.stopLocation.latitude,
-          longitude: studentData.stopLocation.longitude,
-          latitudeDelta: 0,
-          longitudeDelta: 0,
-        });
-        setInitialRegion({
-          latitude: studentData.stopLocation.latitude,
-          longitude: studentData.stopLocation.longitude,
-          latitudeDelta: 0.015,
-          longitudeDelta: 0.015,
+      // Fetch static route info
+      if (studentData.routeId) {
+        getDoc(doc(db, 'routes', studentData.routeId)).then(routeSnap => {
+          if (routeSnap.exists()) {
+            const rData = routeSnap.data() as any;
+            setRouteInfo(rData);
+
+            // Find the student's stop
+            const stop = rData.stops?.find((s: any) => s.id === studentData.stopId);
+            if (stop) {
+              const stopLat = stop.latitude ?? stop.lat;
+              const stopLng = stop.longitude ?? stop.lng;
+              if (stopLat && stopLng) {
+                studentData.stopLocation = { latitude: stopLat, longitude: stopLng, label: stop.name };
+                
+                markerCoord.setValue({
+                  latitude: stopLat,
+                  longitude: stopLng,
+                  latitudeDelta: 0,
+                  longitudeDelta: 0,
+                });
+                setInitialRegion({
+                  latitude: stopLat,
+                  longitude: stopLng,
+                  latitudeDelta: 0.015,
+                  longitudeDelta: 0.015,
+                });
+              }
+            } else {
+               // Fallback
+               setInitialRegion({
+                latitude: 19.1873,
+                longitude: 73.1927,
+                latitudeDelta: 0.015,
+                longitudeDelta: 0.015,
+              });
+            }
+          }
         });
       } else {
         // Fallback
@@ -155,86 +181,132 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     };
   }, [user?.uid]);
 
-  // Subscribe to /buses/{busId} only if fee status is NOT unpaid
+  // Subscribe to assignment, then bus location
   useEffect(() => {
-    if (!student?.busId || feeStatus === 'UNPAID') return;
+    if (!student?.routeId || feeStatus === 'UNPAID') return;
 
-    const unsubscribe = onSnapshot(doc(db, 'buses', student.busId), (snap) => {
-      if (snap.exists()) {
-        const busData = snap.data() as any;
-        if (!busData) return;
+    const today = new Date().toISOString().split('T')[0];
+    let assignmentBusId: string | null = null;
+    let assignmentDriverId: string | null = null;
 
-        const lat =
-          busData.currentLocation?.latitude ??
-          busData.currentLocation?.lat;
+    const asgnQ = query(
+      collection(db, 'assignments'),
+      where('routeId', '==', student.routeId),
+      where('date', '==', today)
+    );
 
-        const lng =
-          busData.currentLocation?.longitude ??
-          busData.currentLocation?.lng;
+    const unsubscribeAssignment = onSnapshot(asgnQ, (asgnSnap) => {
+      if (!asgnSnap.empty) {
+        const asgn = asgnSnap.docs[0].data() as any;
+        assignmentBusId = asgn.busId || null;
+        assignmentDriverId = asgn.driverId || null;
 
-        if (!lat || !lng) return;
-
-        setBusLocation({
-          ...busData,
-          currentLocation: {
-            latitude: lat,
-            longitude: lng,
-          },
-        });
-
-        setIsActive(busData.isActive === true);
-
-        if (
-          busData.isActive &&
-          student?.stopLocation
-        ) {
-          const eta = calculateETA(
-            lat,
-            lng,
-            student.stopLocation.latitude,
-            student.stopLocation.longitude
-          );
-          setEtaMinutes(eta);
-        }
-
-        // Smoothly animate bus coordinate updates
-        if (busData.isActive) {
-          markerCoord.timing({
-            latitude: lat,
-            longitude: lng,
-            duration: 1000,
-            useNativeDriver: false,
-          } as any).start();
+        // Resolve driver from assignment
+        if (assignmentDriverId) {
+          getDoc(doc(db, 'users', assignmentDriverId)).then((snap) => {
+            if (snap.exists()) {
+              setDriver(snap.data());
+            } else {
+              setDriver(null);
+            }
+          }).catch(err => {
+            console.error('[ParentHome] Fetch driver error:', err);
+          });
+        } else {
+          setDriver(null);
         }
       } else {
-        setBusLocation(null);
-        setIsActive(false);
-        setEtaMinutes(null);
+        // Fallback: use bus with matching defaultRouteId
+        const busesQ = query(
+          collection(db, 'buses'),
+          where('defaultRouteId', '==', student.routeId)
+        );
+        getDocs(busesQ).then(busSnap => {
+          if (!busSnap.empty) {
+            const busData = busSnap.docs[0].data() as any;
+            assignmentBusId = busSnap.docs[0].id;
+            // Resolve driver from bus.driverId as fallback
+            if (busData.driverId) {
+              getDoc(doc(db, 'users', busData.driverId)).then((dSnap) => {
+                setDriver(dSnap.exists() ? dSnap.data() : null);
+              });
+            }
+          }
+        });
       }
     }, (err) => {
-      console.error('[ParentHome] Bus stream error:', err);
+      console.error('[ParentHome] Assignment stream error:', err);
+      // Fallback to bus query
+      const busesQ = query(
+        collection(db, 'buses'),
+        where('defaultRouteId', '==', student.routeId)
+      );
+      getDocs(busesQ).then(busSnap => {
+        if (!busSnap.empty) {
+          const busData = busSnap.docs[0].data() as any;
+          assignmentBusId = busSnap.docs[0].id;
+        }
+      });
     });
 
-    return () => unsubscribe();
-  }, [student?.busId, feeStatus, student?.stopLocation]);
+    // Subscribe to bus location once we have the busId
+    let unsubscribeBus: (() => void) | null = null;
 
-  // Fetch driver profile information on change
-  useEffect(() => {
-    if (!busLocation?.driverId) {
-      setDriver(null);
-      return;
-    }
+    const waitForBusId = setInterval(() => {
+      if (assignmentBusId) {
+        clearInterval(waitForBusId);
 
-    getDoc(doc(db, 'users', busLocation.driverId)).then((snap) => {
-      if (snap.exists()) {
-        setDriver(snap.data());
-      } else {
-        setDriver(null);
+        unsubscribeBus = onSnapshot(doc(db, 'buses', assignmentBusId), (busDoc) => {
+          if (!busDoc.exists()) {
+            setBusLocation(null);
+            setIsActive(false);
+            setEtaMinutes(null);
+            return;
+          }
+
+          const busData = busDoc.data() as any;
+          const lat = busData.currentLocation?.latitude;
+          const lng = busData.currentLocation?.longitude;
+
+          if (!lat || !lng) return;
+
+          setBusLocation({
+            ...busData,
+            currentLocation: { latitude: lat, longitude: lng },
+          });
+
+          setIsActive(busData.isActive === true);
+
+          if (busData.isActive && student?.stopLocation) {
+            const eta = calculateETA(
+              lat,
+              lng,
+              student.stopLocation.latitude,
+              student.stopLocation.longitude
+            );
+            setEtaMinutes(eta);
+          }
+
+          if (busData.isActive) {
+            markerCoord.timing({
+              latitude: lat,
+              longitude: lng,
+              duration: 1000,
+              useNativeDriver: false,
+            } as any).start();
+          }
+        }, (err) => {
+          console.error('[ParentHome] Bus stream error:', err);
+        });
       }
-    }).catch(err => {
-      console.error('[ParentHome] Fetch driver error:', err);
-    });
-  }, [busLocation?.driverId]);
+    }, 500);
+
+    return () => {
+      unsubscribeAssignment();
+      if (unsubscribeBus) unsubscribeBus();
+      clearInterval(waitForBusId);
+    };
+  }, [student?.routeId, feeStatus, student?.stopLocation]);
 
   const fitMapToRoute = () => {
     if (!mapRef.current || !student?.stopLocation) return;
@@ -254,9 +326,9 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
       });
     }
 
-    // Add route stops
-    if (busLocation?.stops && busLocation.stops.length > 0) {
-      busLocation.stops.forEach((s: any) => {
+    // Add route stops from routeInfo
+    if (routeInfo?.stops && routeInfo.stops.length > 0) {
+      routeInfo.stops.forEach((s: any) => {
         const sLat = s.latitude ?? s.lat;
         const sLng = s.longitude ?? s.lng;
         if (sLat && sLng) {
@@ -284,7 +356,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     busLocation?.currentLocation?.latitude,
     busLocation?.currentLocation?.longitude,
     isActive,
-    busLocation?.stops?.length,
+    routeInfo?.stops?.length,
   ]);
 
   if (isLoading || (student && feeStatus === null)) {
@@ -338,7 +410,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     );
   }
 
-  if (!student.busId || !student.stopLocation) {
+  if (!student.routeId || !student.stopId) {
     return (
       <View style={[styles.container, styles.center, { paddingHorizontal: 24 }]}>
         <StatusBar barStyle="dark-content" />
@@ -369,8 +441,8 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
         <View style={styles.warningIconContainer}>
           <Text style={styles.warningEmoji}>🚌</Text>
         </View>
-        <Text style={styles.unlinkedTitle}>Child Not Linked to a Bus</Text>
-        <Text style={styles.unlinkedSubtitle}>Your child is not linked to a bus yet. Please contact your operator to assign a bus and stop.</Text>
+        <Text style={styles.unlinkedTitle}>Child Not Linked to a Route</Text>
+        <Text style={styles.unlinkedSubtitle}>Your child is not linked to a route yet. Please contact your operator to assign a route and stop.</Text>
         <TouchableOpacity
           style={styles.addChildButton}
           onPress={() => {}} // User suggested opening dialer, but operator number is dynamic. No-op for now.
@@ -435,22 +507,23 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
           </Marker.Animated>
         )}
 
-        {/* Route stop markers */}
-        {busLocation?.stops &&
-          busLocation.stops.map((stop: any, index: number) => {
+        {/* Route stop markers from routeInfo */}
+        {routeInfo?.stops &&
+          routeInfo.stops.map((stop: any, index: number) => {
             const stopId = stop.id || stop.name || index.toString();
-            const visitedList = busLocation.visitedStops || [];
-            const isVisited = visitedList.includes(stop.order);
-            const isNext = busLocation.stops.find((s: any) => !visitedList.includes(s.order))?.name === stop.name;
+            // In absence of assignment, we don't have visited state
+            const visitedList = busLocation?.visitedStops || [];
+            const isVisited = isActive && visitedList.includes(stop.order);
+            const isNext = isActive && routeInfo.stops.find((s: any) => !visitedList.includes(s.order))?.name === stop.name;
             const stopLat = stop.latitude ?? stop.lat;
             const stopLng = stop.longitude ?? stop.lng;
 
             if (!stopLat || !stopLng) return null;
 
-            const isStudentStop = student.stopLocation && (
+            const isStudentStop = stop.id === student.stopId || (student.stopLocation && (
               student.stopLocation.label === stop.name ||
               getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
-            );
+            ));
 
             return (
               <Marker
@@ -478,9 +551,9 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
             );
           })}
 
-        {/* Student Stop fallback marker (renders only if the student stop is not in the bus route stops) */}
+        {/* Student Stop fallback marker (renders only if the student stop is not in the route stops) */}
         {student.stopLocation && (() => {
-          const stopsList = busLocation?.stops || [];
+          const stopsList = routeInfo?.stops || [];
           const isStopInList = stopsList.some((stop: any) => {
             const stopLat = stop.latitude ?? stop.lat;
             const stopLng = stop.longitude ?? stop.lng;
@@ -541,15 +614,15 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
             </TouchableOpacity>
           )}
 
-          {/* Next stop name from bus stops array */}
-          {busLocation?.stops && (
+          {/* Next stop name from route stops array */}
+          {routeInfo?.stops && isActive && (
             <View style={styles.nextStopContainer}>
               <Text style={styles.nextStopLabel}>Next Stop:</Text>
               <Text style={styles.nextStopName}>
                 {(() => {
-                  const nextUnvisitedStop = busLocation.stops.find((s: any) => {
+                  const nextUnvisitedStop = routeInfo.stops.find((s: any) => {
                     const stopId = s.id || s.name || '';
-                    return !busLocation.visitedStops?.includes(stopId);
+                    return !busLocation?.visitedStops?.includes(stopId);
                   });
                   return nextUnvisitedStop?.name || 'No more stops';
                 })()}

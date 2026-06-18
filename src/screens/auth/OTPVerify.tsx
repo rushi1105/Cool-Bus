@@ -224,8 +224,6 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               name: registrationData.name,
               phone: registrationData.phone,
               operatorId: registrationData.operatorId,
-              busNumber: registrationData.busNumber,
-              busId: registrationData.busId,
               shift: registrationData.shift,
             });
           } else if (role === 'parent') {
@@ -238,13 +236,8 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               gender: registrationData.gender,
               operatorCode: registrationData.operatorCode,
               operatorId: registrationData.operatorId,
-              busId: registrationData.selectedBusId,
-              stopOrder: registrationData.selectedStopIndex,
-              stopLocation: {
-                latitude: registrationData.selectedStopLat,
-                longitude: registrationData.selectedStopLng,
-                label: registrationData.selectedStopName,
-              },
+              routeId: registrationData.routeId,
+              stopId: registrationData.stopId,
             });
           }
           // Do NOT manually navigate. Let AppNavigator handle it.

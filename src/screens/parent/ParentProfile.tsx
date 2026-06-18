@@ -26,11 +26,11 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
 
   const [students, setStudents] = useState<any[]>([]);
   const [latestFeesByStudent, setLatestFeesByStudent] = useState<Record<string, any>>({});
-  const [busesByBusId, setBusesByBusId] = useState<Record<string, any>>({});
+  const [routesByRouteId, setRoutesByRouteId] = useState<Record<string, any>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchedBusIdsRef = useRef<Set<string>>(new Set());
+  const fetchedRouteIdsRef = useRef<Set<string>>(new Set());
 
   const displayName = profile?.name ?? 'Parent';
   const displayPhone = profile?.phone ?? '';
@@ -120,38 +120,38 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
     };
   }, [profile?.id]);
 
-  // 2. Fetch buses dynamically (batch & cache lookups)
+  // 2. Fetch routes dynamically (batch & cache lookups)
   useEffect(() => {
     if (students.length === 0) return;
 
-    const busIds = Array.from(new Set(students.map((s) => s.busId).filter(Boolean)));
-    const newBusesToFetch = busIds.filter((id) => !fetchedBusIdsRef.current.has(id));
+    const routeIds = Array.from(new Set(students.map((s) => s.routeId).filter(Boolean)));
+    const newRoutesToFetch = routeIds.filter((id) => !fetchedRouteIdsRef.current.has(id));
 
-    if (newBusesToFetch.length === 0) return;
+    if (newRoutesToFetch.length === 0) return;
 
-    newBusesToFetch.forEach((id) => fetchedBusIdsRef.current.add(id));
+    newRoutesToFetch.forEach((id) => fetchedRouteIdsRef.current.add(id));
 
-    const fetchBuses = async () => {
-      const newBuses: Record<string, any> = {};
+    const fetchRoutes = async () => {
+      const newRoutes: Record<string, any> = {};
       await Promise.all(
-        newBusesToFetch.map(async (busId) => {
+        newRoutesToFetch.map(async (routeId) => {
           try {
-            const snap = await getDoc(doc(db, 'buses', busId));
+            const snap = await getDoc(doc(db, 'routes', routeId));
             if (snap.exists()) {
-              newBuses[busId] = snap.data();
+              newRoutes[routeId] = snap.data();
             }
           } catch (err) {
-            console.error('[ParentProfile] Error fetching bus:', busId, err);
+            console.error('[ParentProfile] Error fetching route:', routeId, err);
           }
         })
       );
 
-      if (Object.keys(newBuses).length > 0) {
-        setBusesByBusId((prev) => ({ ...prev, ...newBuses }));
+      if (Object.keys(newRoutes).length > 0) {
+        setRoutesByRouteId((prev) => ({ ...prev, ...newRoutes }));
       }
     };
 
-    fetchBuses();
+    fetchRoutes();
   }, [students]);
 
   const menuItems = [
@@ -233,9 +233,10 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
         ) : (
           <View style={styles.childrenList}>
             {students.map((student) => {
-              const busInfo = busesByBusId[student.busId];
-              const busNumber = busInfo?.busNumber ?? 'Not Assigned';
-              const stopName = student.stopLocation?.label ?? 'N/A';
+              const routeInfo = routesByRouteId[student.routeId];
+              const routeName = routeInfo?.name ?? 'Not Assigned';
+              const stopObj = routeInfo?.stops?.find((s: any) => s.id === student.stopId);
+              const stopName = stopObj?.name ?? 'N/A';
               const feeDoc = latestFeesByStudent[student.id];
               const feeDetails = getFeeStatusDetails(feeDoc?.status);
 
@@ -249,7 +250,7 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
                   <View style={styles.childDetails}>
                     <Text style={styles.childNameText}>{student.name}</Text>
                     <Text style={styles.childSubtext}>Grade: {student.grade}</Text>
-                    <Text style={styles.childSubtext}>Bus: {busNumber}</Text>
+                    <Text style={styles.childSubtext}>Route: {routeName}</Text>
                     <Text style={styles.childSubtext}>Stop: {stopName}</Text>
                   </View>
                   <View style={[styles.statusBadge, { backgroundColor: feeDetails.bg }]}>

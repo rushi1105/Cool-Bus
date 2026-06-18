@@ -61,6 +61,19 @@ export const Config = {
   } as const,
 
   shifts: ['Morning', 'Evening', 'Both'] as const,
+
+  stopSelection: {
+    dedupRadiusMeters: 50,
+    walkingSpeedMetersPerMin: 80,
+    urbanFudgeFactor: 1.3,
+    maxRecommendations: 20,
+    searchDebounceMs: 300,
+    clusterZoomThreshold: 14,
+    maxStopsWithoutClustering: 30,
+    cacheTtlHours: 24,
+    nearbyRadiusKm: 5,
+    locationAccuracyThreshold: 100,
+  },
 } as const;
 
 export type UserRole = (typeof Config.roles)[keyof typeof Config.roles];

@@ -112,16 +112,11 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
   const [operatorId, setOperatorId] = useState('');
   const [operatorName, setOperatorName] = useState('');
   const [operatorVerified, setOperatorVerified] = useState(false);
-  const [buses, setBuses] = useState<any[]>([]);
-  const [selectedBusId, setSelectedBusId] = useState('');
-  const [selectedBusNumber, setSelectedBusNumber] = useState('');
-  const [stops, setStops] = useState<any[]>([]);
-  const [selectedStopIndex, setSelectedStopIndex] = useState(-1);
-  const [selectedStopName, setSelectedStopName] = useState('');
-  const [selectedStopLat, setSelectedStopLat] = useState(0);
-  const [selectedStopLng, setSelectedStopLng] = useState(0);
   const [isVerifyingOperator, setIsVerifyingOperator] = useState(false);
   const [operatorError, setOperatorError] = useState('');
+
+  // Stop selection result from StopSelectionScreen
+  const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
 
   const coupon = useCoupon();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -204,22 +199,17 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     const isEmailValid = validateEmail(email);
     const isPhoneValid = validatePhone(phone) && !phoneError && !isCheckingPhone;
     const isOperatorValid = operatorVerified && operatorId !== '' && !operatorError && !isVerifyingOperator;
-    const isBusValid = selectedBusId !== '';
-    const isStopValid = selectedStopIndex !== -1;
 
-    const isValid = !!(
+    const basicFieldsValid = !!(
       parentName.trim() &&
       isPhoneValid &&
       email.trim() &&
       isEmailValid &&
       childName.trim() &&
-      grade.trim() &&
-      isOperatorValid &&
-      isBusValid &&
-      isStopValid
+      grade.trim()
     );
 
-    setIsFormValid(isValid);
+    setIsFormValid(isOperatorValid && basicFieldsValid);
   }, [
     parentName,
     phone,
@@ -227,8 +217,6 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     childName,
     grade,
     operatorVerified,
-    selectedBusId,
-    selectedStopIndex,
     phoneError,
     isCheckingPhone,
     operatorId,
@@ -243,10 +231,6 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     setOperatorName('');
     setOperatorId('');
     setOperatorVerified(false);
-    setBuses([]);
-    setSelectedBusId('');
-    setStops([]);
-    setSelectedStopIndex(-1);
 
     try {
       const opQ = query(
@@ -269,15 +253,7 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
       setOperatorId(opId);
       setOperatorName(opData.name || '');
       setOperatorVerified(true);
-
-      const busQ = query(
-        collection(db, 'buses'),
-        where('operatorId', '==', opId)
-      );
-      const busSnap = await getDocs(busQ);
-
-      const fetchedBuses = busSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setBuses(fetchedBuses);
+      setSelectedStopId(null);
     } catch (err) {
       console.error('Verify Operator Error:', err);
       setOperatorError('Failed to verify operator. Please try again.');
@@ -287,53 +263,45 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     }
   };
 
-  const handleBusSelection = (busId: string) => {
-    setSelectedBusId(busId);
-    setSelectedStopIndex(-1);
-    setSelectedStopName('');
-    
-    const bus = buses.find(b => b.id === busId);
-    if (bus) {
-      setSelectedBusNumber(bus.busNumber);
-      setStops(bus.stops || []);
-    } else {
-      setSelectedBusNumber('');
-      setStops([]);
-    }
-  };
-
-  const handleStopSelection = (index: number) => {
-    setSelectedStopIndex(index);
-    const stop = stops[index];
-    if (stop) {
-      setSelectedStopName(stop.name || '');
-      setSelectedStopLat(stop.lat || 0);
-      setSelectedStopLng(stop.lng || 0);
-    }
-  };
-
   const handleContinue = () => {
-    navigation.navigate('OTPVerify', {
-      role: 'parent',
+    const registrationData = {
+      parentName,
+      phone: '+91' + phone,
+      email,
+      childName,
+      grade,
+      gender: selectedGender,
+      operatorCode,
+      operatorId,
+      couponCode: coupon.code,
+    };
+
+    navigation.navigate('StopSelection', {
+      operatorId,
+      operatorCode,
       phone,
-      registrationData: {
-        parentName,
-        phone: '+91' + phone,
-        email,
-        childName,
-        grade,
-        gender: selectedGender,
-        operatorCode,
-        operatorId,
-        operatorName,
-        selectedBusId,
-        selectedBusNumber,
-        selectedStopIndex,
-        selectedStopName,
-        selectedStopLat,
-        selectedStopLng,
-        couponCode: coupon.code,
-      },
+      registrationData,
+    });
+  };
+
+  const handleFindNearbyStops = () => {
+    const registrationData = {
+      parentName,
+      phone: '+91' + phone,
+      email,
+      childName,
+      grade,
+      gender: selectedGender,
+      operatorCode: '',
+      operatorId: '',
+      couponCode: coupon.code,
+    };
+
+    navigation.navigate('StopSelection', {
+      operatorId: '',
+      operatorCode: '',
+      phone,
+      registrationData,
     });
   };
 
@@ -497,76 +465,86 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
             </View>
           </View>
 
-          {/* Operator & Coupon Section */}
+          {/* Registration Path Selection */}
           <Text style={[styles.sectionTitle, { marginTop: 28 }]}>
-            Operator & Coupon
+            Select Registration Method
           </Text>
+
+          {/* Option A: Operator Code */}
           <View style={styles.form}>
-            <View style={styles.field}>
-              <Text style={styles.label}>Operator Code</Text>
-              <Text style={styles.hint}>
+            <View style={styles.optionACard}>
+              <View style={styles.optionHeader}>
+                <View style={styles.optionBadge}>
+                  <Text style={styles.optionBadgeText}>Option A</Text>
+                </View>
+                <Text style={styles.optionTitle}>I Have an Operator Code</Text>
+              </View>
+              <Text style={styles.optionDesc}>
                 Ask your bus operator for their code
               </Text>
-              <TextInput
-                style={styles.input}
-                value={operatorCode}
-                onChangeText={(text) => {
-                  setOperatorCode(text.toUpperCase());
-                  setOperatorVerified(false);
-                  setOperatorId('');
-                  setOperatorName('');
-                }}
-                onBlur={verifyOperator}
-                placeholder="e.g. SAFERIDE"
-                placeholderTextColor={Colors.textTertiary}
-                autoCapitalize="characters"
-              />
+              <View style={styles.operatorCodeRow}>
+                <TextInput
+                  style={[styles.input, styles.operatorInput]}
+                  value={operatorCode}
+                  onChangeText={(text) => {
+                    setOperatorCode(text.toUpperCase());
+                    setOperatorVerified(false);
+                    setOperatorId('');
+                    setOperatorName('');
+                  }}
+                  placeholder="e.g. SAFERIDE"
+                  placeholderTextColor={Colors.textTertiary}
+                  autoCapitalize="characters"
+                />
+                <TouchableOpacity 
+                  style={[styles.verifyButton, (!operatorCode.trim() || isVerifyingOperator) && styles.verifyButtonDisabled]} 
+                  onPress={verifyOperator}
+                  disabled={isVerifyingOperator || !operatorCode.trim()}
+                >
+                  <Text style={styles.verifyButtonText}>Check</Text>
+                </TouchableOpacity>
+              </View>
               {isVerifyingOperator && <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: 8 }} />}
               {operatorError ? <Text style={styles.errorText}>{operatorError}</Text> : null}
               {operatorName ? <Text style={styles.successText}>✓ {operatorName}</Text> : null}
+
+              {operatorVerified && (
+                <TouchableOpacity
+                  style={styles.continueFromCodeButton}
+                  onPress={handleContinue}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.continueFromCodeButtonText}>Continue with {operatorName}</Text>
+                  <Text style={styles.continueFromCodeButtonArrow}>→</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
-            {operatorId ? (
-              <View style={styles.field}>
-                <Text style={styles.label}>Select Bus</Text>
-                {buses.length === 0 ? (
-                  <Text style={styles.hint}>No buses found for this operator.</Text>
-                ) : (
-                  buses.map((bus) => (
-                    <TouchableOpacity
-                      key={bus.id}
-                      style={[styles.input, styles.selectionItem, selectedBusId === bus.id && styles.selectionItemActive]}
-                      onPress={() => handleBusSelection(bus.id)}
-                    >
-                      <Text style={[styles.selectionText, selectedBusId === bus.id && styles.selectionTextActive]}>
-                        {bus.busNumber} {bus.routeName ? `— ${bus.routeName}` : ''}
-                      </Text>
-                    </TouchableOpacity>
-                  ))
-                )}
-              </View>
-            ) : null}
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>OR</Text>
+              <View style={styles.dividerLine} />
+            </View>
 
-            {selectedBusId ? (
-              <View style={styles.field}>
-                <Text style={styles.label}>Select Stop</Text>
-                {stops.length === 0 ? (
-                  <Text style={styles.hint}>No stops defined for this bus.</Text>
-                ) : (
-                  stops.map((stop, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={[styles.input, styles.selectionItem, selectedStopIndex === index && styles.selectionItemActive]}
-                      onPress={() => handleStopSelection(index)}
-                    >
-                      <Text style={[styles.selectionText, selectedStopIndex === index && styles.selectionTextActive]}>
-                        {stop.name || `Stop ${index + 1}`}
-                      </Text>
-                    </TouchableOpacity>
-                  ))
-                )}
+            {/* Option B: Find Nearby Stops */}
+            <View style={styles.optionBCard}>
+              <View style={styles.optionHeader}>
+                <View style={[styles.optionBadge, styles.optionBadgeB]}>
+                  <Text style={[styles.optionBadgeText, styles.optionBadgeTextB]}>Option B</Text>
+                </View>
+                <Text style={styles.optionTitle}>Find Nearby Stops</Text>
               </View>
-            ) : null}
+              <Text style={styles.optionDesc}>
+                Discover stops near your location and choose an operator
+              </Text>
+              <TouchableOpacity
+                style={styles.findStopsButton}
+                onPress={handleFindNearbyStops}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.findStopsButtonText}>📍 Find Nearby Stops</Text>
+              </TouchableOpacity>
+            </View>
 
             <CouponInput
               value={coupon.code}
@@ -577,20 +555,6 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
               isValid={coupon.validation?.valid}
             />
           </View>
-
-          {/* Continue Button */}
-          <TouchableOpacity
-            style={[
-              styles.continueButton,
-              !isFormValid && styles.continueButtonDisabled,
-            ]}
-            onPress={handleContinue}
-            disabled={!isFormValid}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.continueButtonText}>Continue to Verify</Text>
-            <Text style={styles.continueButtonArrow}>→</Text>
-          </TouchableOpacity>
         </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -808,6 +772,70 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 4,
   },
+  operatorCodeRow: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'center',
+  },
+  operatorInput: {
+    flex: 1,
+  },
+  verifyButton: {
+    backgroundColor: Colors.primary,
+    height: 52,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  verifyButtonDisabled: {
+    backgroundColor: Colors.textTertiary,
+  },
+  verifyButtonText: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  dropdownContainer: {
+    position: 'relative',
+    zIndex: 1,
+  },
+  dropdownHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 52,
+    paddingHorizontal: 16,
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+  },
+  dropdownHeaderText: {
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  dropdownIcon: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  dropdownList: {
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    marginTop: 8,
+    maxHeight: 250,
+    overflow: 'hidden',
+  },
+  dropdownItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.background,
+  },
+  dropdownItemActive: {
+    backgroundColor: Colors.primaryFaded,
+  },
   phoneStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -820,6 +848,111 @@ const styles = StyleSheet.create({
   },
   inputError: {
     borderColor: Colors.error,
+  },
+  optionACard: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
+  },
+  optionBCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
+  },
+  optionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  optionBadge: {
+    backgroundColor: Colors.primaryFaded,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  optionBadgeB: {
+    backgroundColor: Colors.successFaded,
+  },
+  optionBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  optionBadgeTextB: {
+    color: Colors.success,
+  },
+  optionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.dark,
+  },
+  optionDesc: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginVertical: 8,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.border,
+  },
+  dividerText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textTertiary,
+  },
+  continueFromCodeButton: {
+    height: 48,
+    backgroundColor: Colors.success,
+    borderRadius: 14,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    elevation: 3,
+    shadowColor: Colors.success,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+  },
+  continueFromCodeButtonText: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  continueFromCodeButtonArrow: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '300',
+  },
+  findStopsButton: {
+    height: 48,
+    backgroundColor: Colors.primary,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+  },
+  findStopsButtonText: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 

@@ -19,6 +19,7 @@ import {
   getDocs,
   serverTimestamp,
   Timestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   initializeAuth,
@@ -280,25 +281,27 @@ export async function registerDriver(
     name: string;
     phone: string;
     operatorId: string;
-    busNumber: string;
-    busId: string;
     shift: string;
   },
 ): Promise<void> {
-  await createUserDoc(uid, {
+  const batch = writeBatch(db);
+  const userRef = doc(db, 'users', uid);
+  
+  batch.set(userRef, {
     name: data.name,
     phone: data.phone,
     email: '',
     role: 'driver',
     operatorId: data.operatorId,
-    busNumber: data.busNumber,
-    busId: data.busId,
     shift: data.shift,
+    schemaVersion: 3,
+    isActive: true,
+    availability: 'assigned',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
-  await updateDoc(doc(db, 'buses', data.busId), {
-    driverId: uid,
-  });
+  await batch.commit();
 }
 
 /**
@@ -315,15 +318,13 @@ export async function registerParent(
     gender: string;
     operatorCode: string;
     operatorId: string;
-    busId: string;
-    stopOrder: number;
-    stopLocation: {
-      latitude: number;
-      longitude: number;
-      label: string;
-    };
+    routeId: string;
+    stopId: string;
+    stopName?: string;
   },
 ): Promise<void> {
+  const batch = writeBatch(db);
+
   // 1. Resolve operator by code (fallback if not passed correctly)
   let operatorId = data.operatorId;
   if (!operatorId) {
@@ -332,58 +333,76 @@ export async function registerParent(
   }
 
   // 2. Create user doc
-  await createUserDoc(uid, {
+  const userRef = doc(db, 'users', uid);
+  batch.set(userRef, {
     name: data.parentName,
     phone: data.phone,
     email: data.email,
     role: 'parent',
     operatorCode: data.operatorCode,
+    schemaVersion: 3,
+    isActive: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
   // 3. Check existing children count BEFORE adding the new one
   const existingCount = await getStudentCountByParent(uid);
 
   // 4. Add student doc
-  const studentId = await addStudentDoc({
+  const studentRef = doc(collection(db, 'students'));
+  batch.set(studentRef, {
     name: data.childName,
     parentId: uid,
-    busId: data.busId,
     operatorId,
+    routeId: data.routeId,
+    stopId: data.stopId,
     grade: data.grade,
     gender: data.gender as 'Male' | 'Female' | 'Other',
-    stopLocation: data.stopLocation,
-    stopOrder: data.stopOrder,
+    isActive: true,
+    schemaVersion: 3,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
   // 5. Create fee record
+  const feeRef = doc(collection(db, 'fees'));
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
   if (existingCount === 0) {
     // First child → free trial
     const trialExpiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    await createFeeDoc({
+    batch.set(feeRef, {
       parentId: uid,
       operatorId,
-      studentId,
+      studentId: studentRef.id,
       status: 'TRIAL',
       month: currentMonth,
       total: 0,
       trialUsed: true,
-      trialExpiry,
+      trialExpiry: Timestamp.fromDate(trialExpiry),
+      schemaVersion: 3,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
   } else {
     // Additional child → unpaid
-    await createFeeDoc({
+    batch.set(feeRef, {
       parentId: uid,
       operatorId,
-      studentId,
+      studentId: studentRef.id,
       status: 'UNPAID',
       month: currentMonth,
       total: 2500,
       trialUsed: true,
+      schemaVersion: 3,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     });
   }
+
+  await batch.commit();
 }
 
 // ─── Mock Data (preserved for screens not yet migrated) ──────────────

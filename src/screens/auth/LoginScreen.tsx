@@ -19,6 +19,8 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../services/firebase';
 
 interface LoginScreenProps {
   navigation: any;
@@ -29,7 +31,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSendOTP = () => {
+  const handleSendOTP = async () => {
     setError('');
     const trimmedPhone = phone.trim();
 
@@ -40,14 +42,34 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
 
     setIsLoading(true);
 
-    // Short simulated loading state to align with premium look-and-feel
-    setTimeout(() => {
+    try {
+      // Issue 1 Fix: Verify account exists before sending OTP
+      const normalizedPhone = `+91${trimmedPhone}`;
+      const q = query(
+        collection(db, 'users'),
+        where('phone', '==', normalizedPhone)
+      );
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        setIsLoading(false);
+        setError('No account found. Please register first.');
+        return;
+      }
+
+      // Short simulated loading state to align with premium look-and-feel
+      setTimeout(() => {
+        setIsLoading(false);
+        navigation.navigate('OTPVerify', {
+          mode: 'login',
+          phone: trimmedPhone,
+        });
+      }, 300);
+    } catch (err) {
+      console.error('[Login] Verification failed:', err);
       setIsLoading(false);
-      navigation.navigate('OTPVerify', {
-        mode: 'login',
-        phone: trimmedPhone,
-      });
-    }, 600);
+      setError('Unable to verify account. Please try again.');
+    }
   };
 
   const isFormValid = phone.trim().length >= 10;
