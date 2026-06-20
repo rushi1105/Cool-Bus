@@ -27,9 +27,11 @@ import { validateEmail, validatePhone } from '../../utils/validation';
 
 interface ParentRegisterProps {
   navigation: any;
+  route: any;
 }
 
-export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) => {
+export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation, route }) => {
+  const { resolvedInvite } = route.params || {};
   const [parentName, setParentName] = useState('');
   const [phone, setPhone] = useState('');
 
@@ -104,9 +106,9 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
   const [selectedGender, setSelectedGender] = useState<string>('Male');
   const [operatorCode, setOperatorCode] = useState('');
 
-  const [operatorId, setOperatorId] = useState('');
-  const [operatorName, setOperatorName] = useState('');
-  const [operatorVerified, setOperatorVerified] = useState(false);
+  const [operatorId, setOperatorId] = useState(resolvedInvite?.operatorId || '');
+  const [operatorName, setOperatorName] = useState(resolvedInvite?.operatorName || '');
+  const [operatorVerified, setOperatorVerified] = useState(!!resolvedInvite);
   const [isVerifyingOperator, setIsVerifyingOperator] = useState(false);
   const [operatorError, setOperatorError] = useState('');
 
@@ -264,9 +266,12 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
 
     navigation.navigate('StopSelection', {
       operatorId,
-      operatorCode,
+      operatorCode: resolvedInvite ? '' : operatorCode,
       phone,
-      registrationData,
+      registrationData: {
+        ...registrationData,
+        inviteId: resolvedInvite?.inviteId,
+      },
     });
   };
 
@@ -456,81 +461,108 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
             Select Registration Method
           </Text>
 
-          {/* Option A: Operator Code */}
           <View style={styles.form}>
-            <View style={styles.optionACard}>
-              <View style={styles.optionHeader}>
-                <View style={styles.optionBadge}>
-                  <Text style={styles.optionBadgeText}>Option A</Text>
+            {resolvedInvite ? (
+              <View style={styles.optionACard}>
+                <View style={styles.optionHeader}>
+                  <View style={[styles.optionBadge, { backgroundColor: Colors.primaryFaded }]}>
+                    <Text style={[styles.optionBadgeText, { color: Colors.primary }]}>Invited</Text>
+                  </View>
+                  <Text style={styles.optionTitle}>Joined via Invite</Text>
                 </View>
-                <Text style={styles.optionTitle}>I Have an Operator Code</Text>
-              </View>
-              <Text style={styles.optionDesc}>
-                Ask your bus operator for their code
-              </Text>
-              <View style={styles.operatorCodeRow}>
-                <TextInput
-                  style={[styles.input, styles.operatorInput]}
-                  value={operatorCode}
-                  onChangeText={(text) => {
-                    setOperatorCode(text.toUpperCase());
-                    setOperatorVerified(false);
-                    setOperatorId('');
-                    setOperatorName('');
-                  }}
-                  placeholder="e.g. SAFERIDE"
-                  placeholderTextColor={Colors.textTertiary}
-                  autoCapitalize="characters"
-                />
-                <TouchableOpacity 
-                  style={[styles.verifyButton, (!operatorCode.trim() || isVerifyingOperator) && styles.verifyButtonDisabled]} 
-                  onPress={verifyOperator}
-                  disabled={isVerifyingOperator || !operatorCode.trim()}
-                >
-                  <Text style={styles.verifyButtonText}>Check</Text>
-                </TouchableOpacity>
-              </View>
-              {isVerifyingOperator && <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: 8 }} />}
-              {operatorError ? <Text style={styles.errorText}>{operatorError}</Text> : null}
-              {operatorName ? <Text style={styles.successText}>✓ {operatorName}</Text> : null}
-
-              {operatorVerified && (
+                <Text style={styles.optionDesc}>
+                  You are registering as a parent for:
+                </Text>
+                <Text style={[styles.successText, { fontSize: 18, marginVertical: 8 }]}>
+                  ✓ {operatorName}
+                </Text>
                 <TouchableOpacity
                   style={styles.continueFromCodeButton}
                   onPress={handleContinue}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.continueFromCodeButtonText}>Continue with {operatorName}</Text>
+                  <Text style={styles.continueFromCodeButtonText}>Continue</Text>
                   <Text style={styles.continueFromCodeButtonArrow}>→</Text>
                 </TouchableOpacity>
-              )}
-            </View>
-
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* Option B: Find Nearby Stops */}
-            <View style={styles.optionBCard}>
-              <View style={styles.optionHeader}>
-                <View style={[styles.optionBadge, styles.optionBadgeB]}>
-                  <Text style={[styles.optionBadgeText, styles.optionBadgeTextB]}>Option B</Text>
-                </View>
-                <Text style={styles.optionTitle}>Find Nearby Stops</Text>
               </View>
-              <Text style={styles.optionDesc}>
-                Discover stops near your location and choose an operator
-              </Text>
-              <TouchableOpacity
-                style={styles.findStopsButton}
-                onPress={handleFindNearbyStops}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.findStopsButtonText}>📍 Find Nearby Stops</Text>
-              </TouchableOpacity>
-            </View>
+            ) : (
+              <>
+                {/* Option A: Operator Code */}
+                <View style={styles.optionACard}>
+                  <View style={styles.optionHeader}>
+                    <View style={styles.optionBadge}>
+                      <Text style={styles.optionBadgeText}>Option A</Text>
+                    </View>
+                    <Text style={styles.optionTitle}>I Have an Operator Code</Text>
+                  </View>
+                  <Text style={styles.optionDesc}>
+                    Ask your bus operator for their code
+                  </Text>
+                  <View style={styles.operatorCodeRow}>
+                    <TextInput
+                      style={[styles.input, styles.operatorInput]}
+                      value={operatorCode}
+                      onChangeText={(text) => {
+                        setOperatorCode(text.toUpperCase());
+                        setOperatorVerified(false);
+                        setOperatorId('');
+                        setOperatorName('');
+                      }}
+                      placeholder="e.g. SAFERIDE"
+                      placeholderTextColor={Colors.textTertiary}
+                      autoCapitalize="characters"
+                    />
+                    <TouchableOpacity 
+                      style={[styles.verifyButton, (!operatorCode.trim() || isVerifyingOperator) && styles.verifyButtonDisabled]} 
+                      onPress={verifyOperator}
+                      disabled={isVerifyingOperator || !operatorCode.trim()}
+                    >
+                      <Text style={styles.verifyButtonText}>Check</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {isVerifyingOperator && <ActivityIndicator size="small" color={Colors.primary} style={{ marginTop: 8 }} />}
+                  {operatorError ? <Text style={styles.errorText}>{operatorError}</Text> : null}
+                  {operatorName ? <Text style={styles.successText}>✓ {operatorName}</Text> : null}
+
+                  {operatorVerified && (
+                    <TouchableOpacity
+                      style={styles.continueFromCodeButton}
+                      onPress={handleContinue}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.continueFromCodeButtonText}>Continue with {operatorName}</Text>
+                      <Text style={styles.continueFromCodeButtonArrow}>→</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                <View style={styles.dividerRow}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>OR</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                {/* Option B: Find Nearby Stops */}
+                <View style={styles.optionBCard}>
+                  <View style={styles.optionHeader}>
+                    <View style={[styles.optionBadge, styles.optionBadgeB]}>
+                      <Text style={[styles.optionBadgeText, styles.optionBadgeTextB]}>Option B</Text>
+                    </View>
+                    <Text style={styles.optionTitle}>Find Nearby Stops</Text>
+                  </View>
+                  <Text style={styles.optionDesc}>
+                    Discover stops near your location and choose an operator
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.findStopsButton}
+                    onPress={handleFindNearbyStops}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.findStopsButtonText}>📍 Find Nearby Stops</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
 
             <CouponInput
               value={coupon.code}

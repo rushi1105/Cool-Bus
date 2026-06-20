@@ -251,8 +251,8 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               shift: registrationData.shift,
             });
             if (registrationData.inviteId) {
-              const { acceptInvite } = require('../../repositories/userRepository');
-              await acceptInvite(registrationData.inviteId);
+              const { acceptInvite } = require('../../services/invites/InviteService');
+              await acceptInvite(registrationData.inviteId, uid, registrationData.name, 'driver');
             }
           } else if (role === 'parent') {
             await registerParent(uid, {
@@ -267,6 +267,10 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               routeId: registrationData.routeId,
               stopId: registrationData.stopId,
             });
+            if (registrationData.inviteId) {
+              const { acceptInvite } = require('../../services/invites/InviteService');
+              await acceptInvite(registrationData.inviteId, uid, registrationData.parentName, 'parent');
+            }
           } else if (role === 'operator') {
             await registerOperator(uid, {
               companyName: registrationData.companyName,

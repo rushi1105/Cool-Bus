@@ -4,6 +4,7 @@
     "slug": "BusTrackApp",
     "version": "1.0.0",
     "orientation": "portrait",
+    "scheme": "coolbus",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {

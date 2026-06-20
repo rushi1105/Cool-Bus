@@ -26,9 +26,11 @@ import Config from '../../constants/config';
 
 interface DriverRegisterProps {
   navigation: any;
+  route: any;
 }
 
-export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) => {
+export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation, route }) => {
+  const { resolvedInvite } = route.params || {};
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
 
@@ -36,7 +38,9 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
   const [phoneError, setPhoneError] = useState('');
   const checkedPhoneRef = useRef('');
 
-  const [pendingInvite, setPendingInvite] = useState<{ id: string; operatorId: string; operatorName: string } | null>(null);
+  const [pendingInvite, setPendingInvite] = useState<{ id: string; operatorId: string; operatorName: string } | null>(
+    resolvedInvite ? { id: resolvedInvite.inviteId, operatorId: resolvedInvite.operatorId, operatorName: resolvedInvite.operatorName } : null
+  );
 
   const checkPhoneNumber = async (phoneNumber: string) => {
     if (phoneNumber.length !== 10) return;
@@ -93,7 +97,7 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
       checkPhoneNumber(phone);
     }
   };
-  const [selectedOperator, setSelectedOperator] = useState<string | null>(null);
+  const [selectedOperator, setSelectedOperator] = useState<string | null>(resolvedInvite?.operatorId || null);
   const [selectedShift, setSelectedShift] = useState<string>('Both');
   const [showOperatorPicker, setShowOperatorPicker] = useState(false);
   const [operators, setOperators] = useState<Operator[]>([]);
@@ -219,7 +223,6 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
               {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
             </View>
 
-            {/* Operator */}
             <View style={styles.field}>
               <Text style={styles.label}>Operator / Agency</Text>
               {pendingInvite ? (

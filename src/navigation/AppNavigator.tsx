@@ -14,6 +14,7 @@ import ParentRegister from '../screens/auth/ParentRegister';
 import OperatorRegister from '../screens/auth/OperatorRegister';
 import { StopSelectionScreen } from '../components/StopSelection/StopSelectionScreen';
 import OTPVerify from '../screens/auth/OTPVerify';
+import InviteResolverScreen from '../screens/auth/InviteResolverScreen';
 
 import { DriverStack } from './DriverStack';
 import { ParentStack } from './ParentStack';
@@ -21,8 +22,20 @@ import { OperatorStack } from './OperatorStack';
 
 import { useAuth } from '../hooks/useAuth';
 import Colors from '../constants/colors';
+import * as Linking from 'expo-linking';
 
 const RootStack = createNativeStackNavigator();
+
+const prefix = Linking.createURL('/');
+
+const linking = {
+  prefixes: [prefix, 'coolbus://'],
+  config: {
+    screens: {
+      InviteResolver: 'invite/:code',
+    },
+  },
+};
 
 export function AppNavigator() {
   const { user, role, loading } = useAuth();
@@ -39,7 +52,7 @@ export function AppNavigator() {
 
 
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <RootStack.Navigator
         screenOptions={{
           headerShown: false,
@@ -56,6 +69,7 @@ export function AppNavigator() {
             <RootStack.Screen name="OperatorRegister" component={OperatorRegister} />
             <RootStack.Screen name="StopSelection" component={StopSelectionScreen} />
             <RootStack.Screen name="OTPVerify" component={OTPVerify} />
+            <RootStack.Screen name="InviteResolver" component={InviteResolverScreen} />
           </>
         ) : (
           <>

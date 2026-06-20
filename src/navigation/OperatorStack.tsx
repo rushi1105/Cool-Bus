@@ -8,6 +8,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Text, View, StyleSheet } from 'react-native';
 import Colors from '../constants/colors';
 
+import OperatorDashboardRouter from './OperatorDashboardRouter';
 import OperatorHome from '../screens/operator/OperatorHome';
 import FleetMap from '../screens/operator/FleetMap';
 import DriverAttendance from '../screens/operator/DriverAttendance';
@@ -50,7 +51,7 @@ function OperatorTabs() {
         },
       })}
     >
-      <Tab.Screen name="Dashboard" component={OperatorHome} />
+      <Tab.Screen name="Dashboard" component={OperatorDashboardRouter} />
       <Tab.Screen name="Fleet" component={FleetMap} />
       <Tab.Screen name="Drivers" component={AssignmentScheduler} />
       <Tab.Screen name="Fees" component={FeeManagement} />

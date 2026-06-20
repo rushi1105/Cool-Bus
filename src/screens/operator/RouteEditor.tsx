@@ -17,31 +17,49 @@ import MapView, { Marker, LongPressEvent, PROVIDER_GOOGLE } from 'react-native-m
 import * as Crypto from 'expo-crypto';
 import Colors from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
+import { useLocationManager } from '../../hooks/useLocationManager';
 import { createRoute, updateRoute } from '../../repositories/routeRepository';
-import type { Route, RouteStop } from '../../repositories/types';
+import { fetchOperator } from '../../repositories/operatorRepository';
+import type { Route, RouteStop, OfficeLocation } from '../../repositories/types';
 
 interface RouteEditorProps {
   navigation: any;
   route: any;
 }
 
-const INITIAL_REGION = {
-  latitude: 12.9716,
-  longitude: 77.5946,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
-};
-
 export const RouteEditor: React.FC<RouteEditorProps> = ({ navigation, route }) => {
   const { profile } = useAuth();
   const existingRoute: Route | undefined = route.params?.route;
   const operatorId: string = route.params?.operatorId ?? profile?.operatorId ?? '';
+
+  const [officeLocation, setOfficeLocation] = useState<OfficeLocation | null | undefined>(undefined);
+  useEffect(() => {
+    if (operatorId) {
+      fetchOperator(operatorId)
+        .then(op => setOfficeLocation(op?.officeLocation || null))
+        .catch(() => setOfficeLocation(null));
+    }
+  }, [operatorId]);
+
+  const { initialRegion: locationRegion, loading: locationLoading } = useLocationManager({
+    officeLocation,
+  });
 
   const [name, setName] = useState(existingRoute?.name || '');
   const [stops, setStops] = useState<RouteStop[]>(existingRoute?.stops || []);
   const [saving, setSaving] = useState(false);
   const [selectedStopIndex, setSelectedStopIndex] = useState<number | null>(null);
   const [editStopName, setEditStopName] = useState('');
+
+  // If editing an existing route with stops, center on first stop; otherwise use LocationManager region
+  const mapInitialRegion = existingRoute?.stops && existingRoute.stops.length > 0
+    ? {
+        latitude: existingRoute.stops[0].latitude,
+        longitude: existingRoute.stops[0].longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      }
+    : locationRegion;
 
   const isEditing = !!existingRoute;
 
@@ -162,6 +180,15 @@ export const RouteEditor: React.FC<RouteEditorProps> = ({ navigation, route }) =
     </TouchableOpacity>
   );
 
+  if (locationLoading) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={{ marginTop: 12, color: Colors.textSecondary }}>Getting location...</Text>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor={Colors.white} />
@@ -197,7 +224,7 @@ export const RouteEditor: React.FC<RouteEditorProps> = ({ navigation, route }) =
           <MapView
             style={styles.map}
             provider={PROVIDER_GOOGLE}
-            initialRegion={INITIAL_REGION}
+            initialRegion={mapInitialRegion}
             onLongPress={handleMapLongPress}
           >
             {stops.map((s, i) => (

@@ -21,7 +21,7 @@ interface UseAcceptInviteReturn {
   /** Error message if resolution fails */
   error: string | null;
   /** Accept the resolved invite during registration */
-  accept: (userId: string, role: InviteRole) => Promise<{ operatorId: string; operatorName: string }>;
+  accept: (userId: string, userName: string, role: InviteRole) => Promise<{ operatorId: string; operatorName: string }>;
 }
 
 /**
@@ -69,12 +69,13 @@ export function useAcceptInvite(inviteCode: string | null): UseAcceptInviteRetur
 
   const handleAccept = async (
     userId: string,
+    userName: string,
     role: InviteRole,
   ): Promise<{ operatorId: string; operatorName: string }> => {
     if (!resolvedInvite) {
       throw new Error('No invite to accept');
     }
-    return acceptInvite(resolvedInvite.inviteId, userId, role);
+    return acceptInvite(resolvedInvite.inviteId, userId, userName, role);
   };
 
   return {

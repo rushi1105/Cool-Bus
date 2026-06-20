@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useCallback } from 'react';
+import React, { useRef, useMemo, useCallback, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,56 +12,53 @@ import MapView, { Marker, Callout, PROVIDER_GOOGLE, Region } from 'react-native-
 import Colors from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useFleet } from '../../hooks/useFleet';
-import { useCurrentLocation } from '../../hooks/useCurrentLocation';
-import type { Bus } from '../../repositories/types';
+import { useLocationManager } from '../../hooks/useLocationManager';
+import { fetchOperator } from '../../repositories/operatorRepository';
+import type { Bus, OfficeLocation } from '../../repositories/types';
 
 interface FleetMapProps {
   navigation: any;
 }
 
-const DEFAULT_REGION: Region = {
-  latitude: 12.9716,
-  longitude: 77.5946,
-  latitudeDelta: 0.1,
-  longitudeDelta: 0.1,
-};
-
 export const FleetMap: React.FC<FleetMapProps> = ({ navigation }) => {
   const { profile } = useAuth();
   const operatorId = profile?.operatorId || null;
   const { buses, loading, error } = useFleet(operatorId);
-  const { latitude: currentLat, longitude: currentLng } = useCurrentLocation();
+  const [officeLocation, setOfficeLocation] = useState<OfficeLocation | null | undefined>(undefined);
+
+  useEffect(() => {
+    if (operatorId) {
+      fetchOperator(operatorId)
+        .then(op => setOfficeLocation(op?.officeLocation || null))
+        .catch(() => setOfficeLocation(null));
+    }
+  }, [operatorId]);
+
+  const { initialRegion: locationRegion, loading: locationLoading } = useLocationManager({
+    officeLocation: officeLocation,
+  });
   const mapRef = useRef<MapView>(null);
 
   const activeBuses = useMemo(() => buses.filter((b) => b.isActive), [buses]);
   const inactiveBuses = useMemo(() => buses.filter((b) => !b.isActive), [buses]);
 
+  // Override: center on active bus fleet if location data is available
   const initialRegion = useMemo<Region>(() => {
     if (activeBuses.length > 0) {
-      const latSum = activeBuses.reduce((s, b) => s + (b.currentLocation?.latitude || 0), 0);
-      const lngSum = activeBuses.reduce((s, b) => s + (b.currentLocation?.longitude || 0), 0);
-      const count = activeBuses.filter((b) => b.currentLocation).length;
-      if (count > 0) {
+      const withLocation = activeBuses.filter((b) => b.currentLocation);
+      if (withLocation.length > 0) {
+        const latSum = withLocation.reduce((s, b) => s + (b.currentLocation?.latitude || 0), 0);
+        const lngSum = withLocation.reduce((s, b) => s + (b.currentLocation?.longitude || 0), 0);
         return {
-          latitude: latSum / count,
-          longitude: lngSum / count,
+          latitude: latSum / withLocation.length,
+          longitude: lngSum / withLocation.length,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         };
       }
     }
-    
-    if (currentLat && currentLng) {
-      return {
-        latitude: currentLat,
-        longitude: currentLng,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
-      };
-    }
-
-    return DEFAULT_REGION;
-  }, [activeBuses, currentLat, currentLng]);
+    return locationRegion;
+  }, [activeBuses, locationRegion]);
 
   const handleFocusBus = useCallback((bus: Bus) => {
     if (bus.currentLocation && mapRef.current) {
@@ -107,13 +104,13 @@ export const FleetMap: React.FC<FleetMapProps> = ({ navigation }) => {
     );
   }, [handleFocusBus]);
 
-  if (loading) {
+  if (loading || locationLoading) {
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Loading fleet map...</Text>
-        </View>
+      <SafeAreaView style={[styles.safeArea, styles.center]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>
+          {locationLoading ? 'Getting location...' : 'Loading fleet data...'}
+        </Text>
       </SafeAreaView>
     );
   }

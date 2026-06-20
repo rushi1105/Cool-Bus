@@ -14,6 +14,8 @@ import {
   acceptInviteDoc,
   revokeInvite as revokeInviteDoc,
   checkCodeExists,
+  getOrCreatePermanentInvite,
+  createInviteAcceptance
 } from '../../repositories/inviteRepository';
 import type { Invite, InviteRole } from '../../repositories/types';
 
@@ -45,13 +47,11 @@ async function generateUniqueCode(): Promise<string> {
   return Crypto.randomUUID().replace(/-/g, '').slice(0, CODE_LENGTH + 2).toUpperCase();
 }
 
-// ─── Invite Generation ───────────────────────────────────────────────
-
 /**
- * Generate a new invite link for a parent or driver.
- * Returns the created Invite with its code and deep-link URL.
+ * Get or create a permanent invite link for a parent or driver.
+ * Returns the Invite with its code and deep-link URL.
  */
-export async function generateInvite(
+export async function getPermanentInvite(
   operatorId: string,
   operatorName: string,
   role: InviteRole,
@@ -60,21 +60,32 @@ export async function generateInvite(
     throw new Error('operatorId and operatorName are required to generate an invite');
   }
 
-  const code = await generateUniqueCode();
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + DEFAULT_EXPIRY_DAYS);
-
-  const inviteId = await createInvite(
+  const invite = await getOrCreatePermanentInvite(
     operatorId,
     operatorName,
     role,
-    code,
-    expiresAt,
+    generateUniqueCode
   );
 
-  const deepLink = `coolbus://invite/${code}`;
+  const deepLink = `coolbus://invite/${invite.code}`;
 
-  return { inviteId, code, deepLink };
+  return { inviteId: invite.id, code: invite.code, deepLink };
+}
+
+/**
+ * Explicitly regenerate an invite, revoking the old one.
+ */
+export async function regenerateInvite(
+  operatorId: string,
+  operatorName: string,
+  role: InviteRole,
+  oldInviteId?: string
+): Promise<{ inviteId: string; code: string; deepLink: string }> {
+  if (oldInviteId) {
+    await revokeInvite(oldInviteId);
+  }
+  // Because the old one is now revoked, getting it will create a new 'active' one.
+  return getPermanentInvite(operatorId, operatorName, role);
 }
 
 // ─── Invite Resolution ───────────────────────────────────────────────
@@ -129,6 +140,7 @@ export async function resolveInviteCode(
 export async function acceptInvite(
   inviteId: string,
   userId: string,
+  userName: string,
   registrationRole: InviteRole,
 ): Promise<{ operatorId: string; operatorName: string }> {
   const invite = await getInviteById(inviteId);
@@ -137,11 +149,15 @@ export async function acceptInvite(
     throw new Error('Invite not found');
   }
 
-  if (invite.status !== 'pending') {
-    throw new Error(`Invite has already been ${invite.status}`);
+  if (invite.status === 'revoked') {
+    throw new Error('This invite has been revoked by the operator');
   }
 
-  // Check expiry
+  if (invite.status !== 'pending' && invite.status !== 'active') {
+    throw new Error(`Invite cannot be accepted because it is ${invite.status}`);
+  }
+
+  // Check expiry (permanent invites may not have expiresAt)
   if (invite.expiresAt) {
     const expiryDate = invite.expiresAt.toDate
       ? invite.expiresAt.toDate()
@@ -158,7 +174,12 @@ export async function acceptInvite(
     );
   }
 
-  await acceptInviteDoc(inviteId, userId);
+  if (invite.isPermanent) {
+    await createInviteAcceptance(inviteId, invite.operatorId, invite.role, userId, userName);
+  } else {
+    // Legacy single-use invite
+    await acceptInviteDoc(inviteId, userId);
+  }
 
   return {
     operatorId: invite.operatorId,
@@ -178,7 +199,7 @@ export async function revokeInvite(inviteId: string): Promise<void> {
     throw new Error('Invite not found');
   }
 
-  if (invite.status !== 'pending') {
+  if (invite.status !== 'pending' && invite.status !== 'active') {
     throw new Error(`Cannot revoke an invite that is ${invite.status}`);
   }
 

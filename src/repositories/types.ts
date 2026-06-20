@@ -121,6 +121,7 @@ export interface Operator {
   busIds: string[];
   driverIds: string[];
   studentCount?: number;
+  parentCount?: number;
   /** Operator's office/base location for map centering */
   officeLocation?: OfficeLocation;
 }
@@ -196,7 +197,7 @@ export const SCHEMA_VERSION = 1;
 // ─── Invite System ──────────────────────────────────────────────────
 
 export type InviteRole = 'driver' | 'parent';
-export type InviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked';
+export type InviteStatus = 'pending' | 'accepted' | 'expired' | 'revoked' | 'active';
 
 export interface Invite {
   id: string;
@@ -205,10 +206,21 @@ export interface Invite {
   role: InviteRole;
   status: InviteStatus;
   code: string;
+  isPermanent?: boolean;
   createdAt: any;
-  expiresAt: any;
+  expiresAt?: any;
   acceptedBy?: string;
   acceptedAt?: any;
+}
+
+export interface InviteAcceptance {
+  id: string;
+  inviteId: string;
+  operatorId: string;
+  role: InviteRole;
+  userId: string;
+  userName?: string;
+  acceptedAt: any;
 }
 
 // ─── Geocoding ──────────────────────────────────────────────────────

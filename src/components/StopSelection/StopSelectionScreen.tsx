@@ -13,8 +13,9 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as ExpoLocation from 'expo-location';
 import Colors from '../../constants/colors';
 import { useStopsForOperator, StopCandidate } from '../../hooks/useStopsForOperator';
+import { useLocationManager } from '../../hooks/useLocationManager';
 import { StopBottomSheet } from './StopBottomSheet';
-import { requestLocationPermissions, getCurrentLocation } from '../../services/location';
+import { requestPermission, getCurrentPosition } from '../../services/location/LocationManager';
 import { fuzzyMatch } from '../../utils/stopUtils';
 import Config from '../../constants/config';
 
@@ -23,15 +24,22 @@ interface StopSelectionScreenProps {
   route: any;
 }
 
-const DEFAULT_REGION: Region = {
-  latitude: 19.1873,
-  longitude: 73.1927,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
-};
+import { fetchOperator } from '../../repositories/operatorRepository';
+import type { OfficeLocation } from '../../repositories/types';
 
 export const StopSelectionScreen: React.FC<StopSelectionScreenProps> = ({ navigation, route }) => {
   const { operatorId } = route.params || {};
+
+  const [officeLocation, setOfficeLocation] = useState<OfficeLocation | null | undefined>(undefined);
+  useEffect(() => {
+    if (operatorId) {
+      fetchOperator(operatorId)
+        .then(op => setOfficeLocation(op?.officeLocation || null))
+        .catch(() => setOfficeLocation(null));
+    }
+  }, [operatorId]);
+
+  const { initialRegion: locationRegion, loading: hookLocationLoading } = useLocationManager({ officeLocation });
 
   const {
     stops,
@@ -67,14 +75,14 @@ export const StopSelectionScreen: React.FC<StopSelectionScreenProps> = ({ naviga
     setLocationError(null);
 
     try {
-      const granted = await requestLocationPermissions();
-      if (!granted) {
+      const status = await requestPermission();
+      if (status !== 'granted') {
         setPermissionDenied(true);
         setLocationLoading(false);
         return;
       }
 
-      const loc = await getCurrentLocation();
+      const loc = await getCurrentPosition();
       if (loc) {
         setUserLocation({ latitude: loc.latitude, longitude: loc.longitude });
         if (mapRef.current) {
@@ -332,14 +340,17 @@ export const StopSelectionScreen: React.FC<StopSelectionScreenProps> = ({ naviga
     );
   }
 
-  const initialRegion: Region = userLocation
-    ? {
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      }
-    : DEFAULT_REGION;
+  if (stopsLoading || locationLoading || hookLocationLoading) {
+    return (
+      <View style={styles.center}>
+        <StatusBar barStyle="dark-content" />
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={{ marginTop: 12, color: Colors.textSecondary }}>
+          {(locationLoading || hookLocationLoading) ? 'Getting your location...' : 'Loading stops...'}
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -391,7 +402,12 @@ export const StopSelectionScreen: React.FC<StopSelectionScreenProps> = ({ naviga
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         style={styles.map}
-        initialRegion={initialRegion}
+        initialRegion={userLocation ? {
+          latitude: userLocation.latitude,
+          longitude: userLocation.longitude,
+          latitudeDelta: 0.02,
+          longitudeDelta: 0.02,
+        } : locationRegion}
         showsUserLocation={!showManualLocation && !permissionDenied}
         showsMyLocationButton={false}
         zoomControlEnabled={false}

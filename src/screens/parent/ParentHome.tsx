@@ -29,6 +29,7 @@ import { getUserByUid, getUserProfile } from '../../repositories/authRepository'
 import { onBusSnapshot, fetchBusesByRoute } from '../../repositories/fleetRepository';
 import { onActiveTripByAssignmentSnapshot } from '../../repositories/tripRepository';
 import { useAuth } from '../../hooks/useAuth';
+import { useLocationManager } from '../../hooks/useLocationManager';
 import { calculateETA, getDistance } from '../../services/location';
 import Colors from '../../constants/colors';
 
@@ -38,6 +39,7 @@ interface ParentHomeProps {
 
 export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
   const { user } = useAuth();
+  const { initialRegion: locationRegion, loading: locationLoading } = useLocationManager();
 
   // States
   const [student, setStudent] = useState<any>(null);
@@ -46,7 +48,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
   const [busLocation, setBusLocation] = useState<any>(null);
   const [driver, setDriver] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [initialRegion, setInitialRegion] = useState<any>(null);
+  const [studentStopRegion, setStudentStopRegion] = useState<any>(null);
   const [isActive, setIsActive] = useState<boolean>(false);
   const [etaMinutes, setEtaMinutes] = useState<number | null>(null);
 
@@ -55,8 +57,8 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
   // AnimatedRegion for smooth bus coordinate changes
   const markerCoord = useRef(
     new AnimatedRegion({
-      latitude: 19.1873,
-      longitude: 73.1927,
+      latitude: locationRegion.latitude,
+      longitude: locationRegion.longitude,
       latitudeDelta: 0,
       longitudeDelta: 0,
     })
@@ -119,7 +121,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
                   latitudeDelta: 0,
                   longitudeDelta: 0,
                 });
-                setInitialRegion({
+                setStudentStopRegion({
                   latitude: stopLat,
                   longitude: stopLng,
                   latitudeDelta: 0.015,
@@ -127,24 +129,12 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
                 });
               }
             } else {
-               // Fallback
-               setInitialRegion({
-                latitude: 19.1873,
-                longitude: 73.1927,
-                latitudeDelta: 0.015,
-                longitudeDelta: 0.015,
-              });
+               setStudentStopRegion(null);
             }
           }
         }).catch((err) => console.error('[ParentHome] getRoute error:', err));
       } else {
-        // Fallback
-        setInitialRegion({
-          latitude: 19.1873,
-          longitude: 73.1927,
-          latitudeDelta: 0.015,
-          longitudeDelta: 0.015,
-        });
+        setStudentStopRegion(null);
       }
 
       // 2. Query /fees where parentId == uid and studentId == student.id limit 1 in real time
@@ -354,12 +344,14 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     routeInfo?.stops?.length,
   ]);
 
-  if (isLoading || (student && feeStatus === null)) {
+  if (isLoading || locationLoading || (student && feeStatus === null)) {
     return (
       <View style={[styles.container, styles.center]}>
         <StatusBar barStyle="dark-content" />
         <ActivityIndicator size="large" color={Colors.primary} />
-        <Text style={styles.loadingText}>Syncing tracking details...</Text>
+        <Text style={styles.loadingText}>
+          {locationLoading ? 'Getting your location...' : 'Syncing tracking details...'}
+        </Text>
       </View>
     );
   }
@@ -478,103 +470,105 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
       </TouchableOpacity>
 
       {/* LAYER 1 — MapView base (fills screen, centers on stop) */}
-      {initialRegion && (
-        <MapView
-          ref={mapRef}
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={initialRegion}
-          showsUserLocation={false}
-          showsMyLocationButton={false}
-          zoomControlEnabled={false}
-          onMapReady={fitMapToRoute}
-        >
-        {/* LAYER 2 — Bus marker (only visible if active) */}
-        {isActive && busLocation?.currentLocation && (
-          <Marker.Animated
-            coordinate={markerCoord as any}
-            title={busLocation.busNumber}
-            description={`Speed: ${busLocation.speed || 0} km/h`}
+      {!locationLoading && studentStopRegion && (
+        <View style={StyleSheet.absoluteFill}>
+          <MapView
+            ref={mapRef}
+            provider={PROVIDER_GOOGLE}
+            style={styles.map}
+            initialRegion={studentStopRegion}
+            showsUserLocation={false}
+            showsMyLocationButton={false}
+            zoomControlEnabled={false}
+            onMapReady={fitMapToRoute}
           >
-            <View style={styles.busMarker}>
-              <Text style={styles.busMarkerText}>🚌</Text>
-            </View>
-          </Marker.Animated>
-        )}
-
-        {/* Route stop markers from routeInfo */}
-        {routeInfo?.stops &&
-          routeInfo.stops.map((stop: any, index: number) => {
-            const stopId = stop.id || stop.name || index.toString();
-            // In absence of assignment, we don't have visited state
-            const visitedList = busLocation?.visitedStops || [];
-            const isVisited = isActive && visitedList.includes(stop.order);
-            const isNext = isActive && routeInfo.stops.find((s: any) => !visitedList.includes(s.order))?.name === stop.name;
-            const stopLat = stop.latitude ?? stop.lat;
-            const stopLng = stop.longitude ?? stop.lng;
-
-            if (!stopLat || !stopLng) return null;
-
-            const isStudentStop = stop.id === student.stopId || (student.stopLocation && (
-              student.stopLocation.label === stop.name ||
-              getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
-            ));
-
-            return (
-              <Marker
-                key={stopId}
-                coordinate={{
-                  latitude: stopLat,
-                  longitude: stopLng,
-                }}
-                title={stop.name}
-                description={isVisited ? 'Visited ✓' : isNext ? 'Next Stop' : ''}
+            {/* LAYER 2 — Bus marker (only visible if active) */}
+            {isActive && busLocation?.currentLocation && (
+              <Marker.Animated
+                coordinate={markerCoord as any}
+                title={busLocation.busNumber}
+                description={`Speed: ${busLocation.speed || 0} km/h`}
               >
-                <View
-                  style={[
-                    styles.stopMarker,
-                    isVisited && styles.stopMarkerVisited,
-                    isNext && styles.stopMarkerNext,
-                    isStudentStop && styles.stopMarkerStudent,
-                  ]}
-                >
-                  <Text style={styles.stopMarkerText}>
-                    {isVisited ? '✓' : isNext ? '●' : '○'}
-                  </Text>
+                <View style={styles.busMarker}>
+                  <Text style={styles.busMarkerText}>🚌</Text>
                 </View>
-              </Marker>
-            );
-          })}
+              </Marker.Animated>
+            )}
 
-        {/* Student Stop fallback marker (renders only if the student stop is not in the route stops) */}
-        {student.stopLocation && (() => {
-          const stopsList = routeInfo?.stops || [];
-          const isStopInList = stopsList.some((stop: any) => {
-            const stopLat = stop.latitude ?? stop.lat;
-            const stopLng = stop.longitude ?? stop.lng;
-            return stopLat && stopLng && (
-              student.stopLocation.label === stop.name ||
-              getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
-            );
-          });
+            {/* Route stop markers from routeInfo */}
+            {routeInfo?.stops &&
+              routeInfo.stops.map((stop: any, index: number) => {
+                const stopId = stop.id || stop.name || index.toString();
+                // In absence of assignment, we don't have visited state
+                const visitedList = busLocation?.visitedStops || [];
+                const isVisited = isActive && visitedList.includes(stop.order);
+                const isNext = isActive && routeInfo.stops.find((s: any) => !visitedList.includes(s.order))?.name === stop.name;
+                const stopLat = stop.latitude ?? stop.lat;
+                const stopLng = stop.longitude ?? stop.lng;
 
-          if (isStopInList) return null;
+                if (!stopLat || !stopLng) return null;
 
-          return (
-            <Marker
-              coordinate={{
-                latitude: student.stopLocation.latitude,
-                longitude: student.stopLocation.longitude,
-              }}
-              title={student.stopLocation.label || `${student.name}'s Stop`}
-            >
-              <View style={[styles.stopMarker, styles.stopMarkerStudent]}>
-                <Text style={styles.stopMarkerText}>○</Text>
-              </View>
-            </Marker>
-          );
-        })()}
-      </MapView>
+                const isStudentStop = stop.id === student.stopId || (student.stopLocation && (
+                  student.stopLocation.label === stop.name ||
+                  getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
+                ));
+
+                return (
+                  <Marker
+                    key={stopId}
+                    coordinate={{
+                      latitude: stopLat,
+                      longitude: stopLng,
+                    }}
+                    title={stop.name}
+                    description={isVisited ? 'Visited ✓' : isNext ? 'Next Stop' : ''}
+                  >
+                    <View
+                      style={[
+                        styles.stopMarker,
+                        isVisited && styles.stopMarkerVisited,
+                        isNext && styles.stopMarkerNext,
+                        isStudentStop && styles.stopMarkerStudent,
+                      ]}
+                    >
+                      <Text style={styles.stopMarkerText}>
+                        {isVisited ? '✓' : isNext ? '●' : '○'}
+                      </Text>
+                    </View>
+                  </Marker>
+                );
+              })}
+
+            {/* Student Stop fallback marker (renders only if the student stop is not in the route stops) */}
+            {student.stopLocation && (() => {
+              const stopsList = routeInfo?.stops || [];
+              const isStopInList = stopsList.some((stop: any) => {
+                const stopLat = stop.latitude ?? stop.lat;
+                const stopLng = stop.longitude ?? stop.lng;
+                return stopLat && stopLng && (
+                  student.stopLocation.label === stop.name ||
+                  getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100
+                );
+              });
+
+              if (isStopInList) return null;
+
+              return (
+                <Marker
+                  coordinate={{
+                    latitude: student.stopLocation.latitude,
+                    longitude: student.stopLocation.longitude,
+                  }}
+                  title={student.stopLocation.label || `${student.name}'s Stop`}
+                >
+                  <View style={[styles.stopMarker, styles.stopMarkerStudent]}>
+                    <Text style={styles.stopMarkerText}>○</Text>
+                  </View>
+                </Marker>
+              );
+            })()}
+          </MapView>
+        </View>
       )}
 
       {/* LAYER 4 — ETA pill (floating top-center) */}

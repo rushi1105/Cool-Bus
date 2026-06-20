@@ -20,7 +20,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db, withMetadata } from './baseRepository';
-import type { Invite, InviteRole } from './types';
+import type { Invite, InviteRole, InviteAcceptance } from './types';
 
 /**
  * Create a new invite document.
@@ -57,11 +57,15 @@ export async function getInviteByCode(code: string): Promise<Invite | null> {
   const q = query(
     collection(db, 'invites'),
     where('code', '==', code.toUpperCase()),
-    where('status', '==', 'pending'),
   );
   const snap = await getDocs(q);
   if (snap.empty) return null;
-  const d = snap.docs[0];
+  // Look for an active or pending invite
+  const d = snap.docs.find(doc => {
+    const data = doc.data();
+    return data.status === 'pending' || data.status === 'active';
+  });
+  if (!d) return null;
   return { id: d.id, ...d.data() } as Invite;
 }
 
@@ -141,6 +145,33 @@ export function onInvitesSnapshot(
 }
 
 /**
+ * Listen to invite acceptances for an operator in real-time.
+ */
+export function onInviteAcceptancesSnapshot(
+  operatorId: string,
+  onData: (acceptances: InviteAcceptance[]) => void,
+  onError?: (err: Error) => void,
+): Unsubscribe {
+  const q = query(
+    collection(db, 'invite_acceptances'),
+    where('operatorId', '==', operatorId),
+  );
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const acceptances = snapshot.docs.map(
+        (d) => ({ id: d.id, ...d.data() } as InviteAcceptance),
+      );
+      onData(acceptances);
+    },
+    (err) => {
+      console.error('[inviteRepository] onInviteAcceptancesSnapshot error:', err);
+      onError?.(err);
+    },
+  );
+}
+
+/**
  * Check if a short invite code already exists in the system.
  */
 export async function checkCodeExists(code: string): Promise<boolean> {
@@ -150,4 +181,76 @@ export async function checkCodeExists(code: string): Promise<boolean> {
   );
   const snap = await getDocs(q);
   return !snap.empty;
+}
+
+/**
+ * Get or create a permanent invite for a specific role and operator.
+ */
+export async function getOrCreatePermanentInvite(
+  operatorId: string,
+  operatorName: string,
+  role: InviteRole,
+  generateCode: () => Promise<string>
+): Promise<Invite> {
+  const q = query(
+    collection(db, 'invites'),
+    where('operatorId', '==', operatorId),
+    where('role', '==', role),
+    where('status', '==', 'active'),
+    where('isPermanent', '==', true)
+  );
+  const snap = await getDocs(q);
+  
+  if (!snap.empty) {
+    const d = snap.docs[0];
+    return { id: d.id, ...d.data() } as Invite;
+  }
+
+  // Create new permanent invite
+  const code = await generateCode();
+  const inviteRef = doc(collection(db, 'invites'));
+  const data = withMetadata(
+    {
+      operatorId,
+      operatorName,
+      role,
+      code,
+      status: 'active',
+      isPermanent: true,
+    } as Record<string, unknown>,
+    ['operatorId', 'operatorName', 'role', 'code'],
+  );
+  await setDoc(inviteRef, data);
+  return { id: inviteRef.id, ...data } as Invite;
+}
+
+/**
+ * Record an invite acceptance historically.
+ */
+export async function createInviteAcceptance(
+  inviteId: string,
+  operatorId: string,
+  role: InviteRole,
+  userId: string,
+  userName?: string
+): Promise<void> {
+  // Simple idempotency check (did this user already accept this invite?)
+  const q = query(
+    collection(db, 'invite_acceptances'),
+    where('inviteId', '==', inviteId),
+    where('userId', '==', userId)
+  );
+  const snap = await getDocs(q);
+  if (!snap.empty) return; // already accepted
+
+  const ref = doc(collection(db, 'invite_acceptances'));
+  const data = withMetadata({
+    inviteId,
+    operatorId,
+    role,
+    userId,
+    userName: userName || null,
+    acceptedAt: serverTimestamp(),
+  });
+  await setDoc(ref, data);
 }

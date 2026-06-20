@@ -40,8 +40,10 @@ import {
 } from '../../services/gps/location';
 import { haversineDistance } from '../../services/gps/distance';
 import { useAuth } from '../../hooks/useAuth';
+import { useLocationManager } from '../../hooks/useLocationManager';
+import { useTabBarSafeBottom } from '../../hooks/useTabBarSafeBottom';
 import Colors from '../../constants/colors';
-import type { Assignment, Route as RouteType } from '../../repositories/types';
+import type { Assignment, Route as RouteType, OfficeLocation } from '../../repositories/types';
 
 function todayString(): string {
   return new Date().toISOString().split('T')[0];
@@ -50,6 +52,20 @@ function todayString(): string {
 export const DriverHome: React.FC = () => {
   const { user, profile } = useAuth();
   const mapRef = useRef<MapView>(null);
+
+  const [officeLocation, setOfficeLocation] = useState<OfficeLocation | null | undefined>(undefined);
+  useEffect(() => {
+    if (profile?.operatorId) {
+      fetchOperator(profile.operatorId)
+        .then(op => setOfficeLocation(op?.officeLocation || null))
+        .catch(() => setOfficeLocation(null));
+    }
+  }, [profile?.operatorId]);
+
+  const { initialRegion, currentLocation: hookLocation, loading: locationLoading } = useLocationManager({
+    officeLocation,
+  });
+  const { bottomOffset } = useTabBarSafeBottom();
 
   const [tripActive, setTripActive] = useState(false);
   const [tripStartTime, setTripStartTime] = useState<Date | null>(null);
@@ -60,7 +76,6 @@ export const DriverHome: React.FC = () => {
   const [busStudents, setBusStudents] = useState<any[]>([]);
   const [currentLocation, setCurrentLocation] = useState<LocationCoords | null>(null);
   const [locationSubscription, setLocationSubscription] = useState<any>(null);
-  const [initialRegion, setInitialRegion] = useState<any>(null);
   const [trackWidth, setTrackWidth] = useState(0);
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [routeData, setRouteData] = useState<RouteType | null>(null);
@@ -127,39 +142,18 @@ export const DriverHome: React.FC = () => {
     loadActiveState();
   }, [assignment, routeData, profile?.busId]);
 
-  // Get initial location
+  // Seed currentLocation from hook if GPS is available
   useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await ExpoLocation.getForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const position = await ExpoLocation.getCurrentPositionAsync({
-            accuracy: ExpoLocation.Accuracy.Balanced,
-          });
-          setInitialRegion({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          });
-          setCurrentLocation({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            heading: position.coords.heading ?? 0,
-            speed: 0,
-            accuracy: position.coords.accuracy ?? 0,
-          });
-          return;
-        }
-      } catch {}
-      setInitialRegion({
-        latitude: 19.1873,
-        longitude: 73.1927,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
+    if (hookLocation && !currentLocation) {
+      setCurrentLocation({
+        latitude: hookLocation.latitude,
+        longitude: hookLocation.longitude,
+        heading: 0,
+        speed: 0,
+        accuracy: 0,
       });
-    })();
-  }, []);
+    }
+  }, [hookLocation]);
 
   // Trip timer
   useEffect(() => {
@@ -530,13 +524,13 @@ export const DriverHome: React.FC = () => {
     });
   }, [trackWidth, tripActive, startTrip, endTrip]);
 
-  if (loadingAssignment || !initialRegion) {
+  if (loadingAssignment || locationLoading) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar barStyle="dark-content" />
         <ActivityIndicator size="large" color="#000000" />
         <Text style={styles.loadingText}>
-          {loadingAssignment ? 'Loading schedule...' : 'Getting your location...'}
+          {locationLoading ? 'Getting your location...' : 'Loading schedule...'}
         </Text>
       </View>
     );
@@ -638,7 +632,7 @@ export const DriverHome: React.FC = () => {
 
       {/* Bottom Slide-to-Start / End */}
       <View
-        style={styles.slideContainer}
+        style={[styles.slideContainer, { bottom: bottomOffset }]}
         onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
       >
         <View style={styles.slideTrack}>
@@ -811,7 +805,6 @@ const styles = StyleSheet.create({
   },
   slideContainer: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 40 : 20,
     left: 16,
     right: 16,
   },
