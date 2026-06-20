@@ -4,7 +4,8 @@
  * Business logic for fee management, trial calculations, and payment processing.
  */
 
-import { Fee, firebaseService } from './firebase';
+import { getFees, getFeesByOperator, payFee as repoPayFee } from '../repositories/feeRepository';
+import type { Fee } from '../repositories/types';
 import Config from '../constants/config';
 
 export interface FeeBreakdown {
@@ -36,7 +37,7 @@ export const feeService = {
    * Check if a parent has any unpaid fees
    */
   hasUnpaidFees: async (parentId: string): Promise<boolean> => {
-    const fees = await firebaseService.getFees(parentId);
+    const fees = await getFees(parentId);
     return fees.some((f) => f.status === 'UNPAID');
   },
 
@@ -47,7 +48,7 @@ export const feeService = {
     parentId: string,
     studentId: string,
   ): Promise<Fee | null> => {
-    const fees = await firebaseService.getFees(parentId);
+    const fees = await getFees(parentId);
     const currentMonth = new Date().toISOString().slice(0, 7);
     return fees.find((f) => f.studentId === studentId && f.month === currentMonth) ?? null;
   },
@@ -74,10 +75,10 @@ export const feeService = {
   },
 
   /**
-   * Process payment (mock)
+   * Process payment
    */
   processPayment: async (feeId: string): Promise<{ success: boolean; transactionId: string }> => {
-    await firebaseService.payFee(feeId);
+    await repoPayFee(feeId);
     return {
       success: true,
       transactionId: `TXN-${Date.now()}`,
@@ -88,7 +89,7 @@ export const feeService = {
    * Get payment history for a parent
    */
   getPaymentHistory: async (parentId: string): Promise<Fee[]> => {
-    const fees = await firebaseService.getFees(parentId);
+    const fees = await getFees(parentId);
     return fees
       .filter((f) => f.status === 'PAID')
       .sort((a, b) => (b.paidAt?.getTime() ?? 0) - (a.paidAt?.getTime() ?? 0));
@@ -98,7 +99,7 @@ export const feeService = {
    * Get all fees (for operator)
    */
   getAllFees: async (operatorId: string): Promise<Fee[]> => {
-    return firebaseService.getFees(undefined, operatorId);
+    return getFeesByOperator(operatorId);
   },
 
   /**
@@ -107,7 +108,7 @@ export const feeService = {
   getOperatorStats: async (
     operatorId: string,
   ): Promise<{ paid: number; unpaid: number; trial: number; totalRevenue: number }> => {
-    const fees = await firebaseService.getFees(undefined, operatorId);
+    const fees = await getFeesByOperator(operatorId);
     return {
       paid: fees.filter((f) => f.status === 'PAID').length,
       unpaid: fees.filter((f) => f.status === 'UNPAID').length,

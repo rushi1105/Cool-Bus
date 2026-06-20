@@ -7,30 +7,16 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  doc,
-  updateDoc,
-  writeBatch,
-  getDocs,
-  type Unsubscribe,
-} from 'firebase/firestore';
-import { db } from '../services/firebase';
+  onNotificationsSnapshot,
+  markRead as repoMarkRead,
+  markAllRead as repoMarkAllRead,
+} from '../repositories/notificationRepository';
+import type { AppNotification } from '../repositories/types';
 
-export interface Notification {
-  id: string;
-  userId: string;
-  type: 'info' | 'warning' | 'success';
-  message: string;
-  timestamp: any;
-  read: boolean;
-}
+export type { AppNotification as Notification };
 
 interface UseNotificationsReturn {
-  notifications: Notification[];
+  notifications: AppNotification[];
   unreadCount: number;
   loading: boolean;
   error: string | null;
@@ -39,7 +25,7 @@ interface UseNotificationsReturn {
 }
 
 export function useNotifications(userId: string | null): UseNotificationsReturn {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,31 +39,9 @@ export function useNotifications(userId: string | null): UseNotificationsReturn 
     setLoading(true);
     setError(null);
 
-    const q = query(
-      collection(db, 'notifications'),
-      where('userId', '==', userId),
-    );
-
-    const unsubscribe: Unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const notifs: Notification[] = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        })) as Notification[];
-
-        // Sort in memory by timestamp descending to bypass Firestore composite index requirement
-        notifs.sort((a, b) => {
-          const getMs = (ts: any) => {
-            if (!ts) return 0;
-            if (ts instanceof Date) return ts.getTime();
-            if (ts.toDate) return ts.toDate().getTime();
-            if (ts.seconds) return ts.seconds * 1000 + (ts.nanoseconds || 0) / 1000000;
-            return new Date(ts).getTime();
-          };
-          return getMs(b.timestamp) - getMs(a.timestamp);
-        });
-
+    const unsubscribe = onNotificationsSnapshot(
+      userId,
+      (notifs) => {
         setNotifications(notifs);
         setLoading(false);
       },
@@ -95,7 +59,7 @@ export function useNotifications(userId: string | null): UseNotificationsReturn 
 
   const markRead = useCallback(async (notifId: string) => {
     try {
-      await updateDoc(doc(db, 'notifications', notifId), { read: true });
+      await repoMarkRead(notifId);
     } catch (err) {
       console.error('[useNotifications] markRead error:', err);
     }
@@ -104,19 +68,7 @@ export function useNotifications(userId: string | null): UseNotificationsReturn 
   const markAllRead = useCallback(async () => {
     if (!userId) return;
     try {
-      const q = query(
-        collection(db, 'notifications'),
-        where('userId', '==', userId),
-        where('read', '==', false),
-      );
-      const snap = await getDocs(q);
-      if (snap.empty) return;
-
-      const batch = writeBatch(db);
-      snap.docs.forEach((d) => {
-        batch.update(d.ref, { read: true });
-      });
-      await batch.commit();
+      await repoMarkAllRead(userId);
     } catch (err) {
       console.error('[useNotifications] markAllRead error:', err);
     }

@@ -4,13 +4,35 @@
  * Business logic for coupon generation, validation, and redemption.
  */
 
-import { Coupon, firebaseService } from './firebase';
+import {
+  validateCoupon,
+  useCoupon,
+  getCoupons,
+  checkCouponCodeExists,
+  createCoupon,
+} from '../repositories/couponRepository';
+import type { Coupon } from '../repositories/types';
 import Config from '../constants/config';
 
 export interface CouponValidation {
   valid: boolean;
   coupon: Coupon | null;
   message: string;
+}
+
+async function generateUniqueCode(operatorName: string): Promise<string | null> {
+  const prefix = operatorName.toUpperCase().replace(/\s+/g, '');
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let suffix = '';
+    for (let i = 0; i < 6; i++) {
+      suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const code = `${prefix}-${suffix}`;
+    const exists = await checkCouponCodeExists(code);
+    if (!exists) return code;
+  }
+  return null;
 }
 
 export const couponService = {
@@ -35,11 +57,11 @@ export const couponService = {
       return {
         valid: false,
         coupon: null,
-        message: 'Invalid format. Expected: OPERATORNAME-FREE-1234',
+        message: 'Invalid format. Expected: OPERATORCODE-XXXXXX',
       };
     }
 
-    const coupon = await firebaseService.validateCoupon(trimmed);
+    const coupon = await validateCoupon(trimmed);
 
     if (!coupon) {
       return { valid: false, coupon: null, message: 'Coupon not found' };
@@ -61,7 +83,7 @@ export const couponService = {
    */
   redeem: async (couponId: string, parentId: string, phone?: string): Promise<boolean> => {
     try {
-      await firebaseService.useCoupon(couponId, parentId, phone);
+      await useCoupon(couponId, parentId, phone);
       return true;
     } catch {
       return false;
@@ -69,17 +91,31 @@ export const couponService = {
   },
 
   /**
-   * Generate a new coupon (operator action)
+   * Generate a new coupon with unique code
    */
-  generate: async (operatorId: string, operatorName: string): Promise<Coupon> => {
-    return firebaseService.generateCoupon(operatorId, operatorName);
+  generate: async (operatorId: string, operatorName: string): Promise<Coupon | null> => {
+    const code = await generateUniqueCode(operatorName);
+    if (!code) return null;
+
+    const expiresAt = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000);
+    const id = await createCoupon(operatorId, code, expiresAt);
+    if (!id) return null;
+
+    return {
+      id,
+      code,
+      operatorId,
+      isUsed: false,
+      createdAt: new Date(),
+      expiresAt,
+    };
   },
 
   /**
    * Get all coupons for an operator
    */
   getOperatorCoupons: async (operatorId: string): Promise<Coupon[]> => {
-    return firebaseService.getCoupons(operatorId);
+    return getCoupons(operatorId);
   },
 
   /**
@@ -88,7 +124,7 @@ export const couponService = {
   getStats: async (
     operatorId: string,
   ): Promise<{ total: number; used: number; unused: number; expired: number }> => {
-    const coupons = await firebaseService.getCoupons(operatorId);
+    const coupons = await getCoupons(operatorId);
     const now = new Date();
     return {
       total: coupons.length,

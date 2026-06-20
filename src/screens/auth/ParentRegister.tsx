@@ -21,8 +21,8 @@ import {
 import Colors from '../../constants/colors';
 import CouponInput from '../../components/CouponInput';
 import { useCoupon } from '../../hooks/useCoupon';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../../services/firebase';
+import { checkPhoneExists } from '../../repositories/authRepository';
+import { getOperatorByCode } from '../../repositories/operatorRepository';
 import { validateEmail, validatePhone } from '../../utils/validation';
 
 interface ParentRegisterProps {
@@ -55,13 +55,8 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     setPhoneError('');
 
     try {
-      const normalizedPhone = `+91${phoneNumber}`;
-      const q = query(
-        collection(db, 'users'),
-        where('phone', '==', normalizedPhone)
-      );
-      const snap = await getDocs(q);
-      if (!snap.empty) {
+      const exists = await checkPhoneExists(phoneNumber);
+      if (exists) {
         setPhoneError('This phone number is already registered.\n\nUse Log In to access your account,\nor enter a different phone number.');
       } else {
         setPhoneError('');
@@ -233,25 +228,16 @@ export const ParentRegister: React.FC<ParentRegisterProps> = ({ navigation }) =>
     setOperatorVerified(false);
 
     try {
-      const opQ = query(
-        collection(db, 'operators'),
-        where('code', '==', operatorCode.trim().toUpperCase())
-      );
-      const opSnap = await getDocs(opQ);
-
-      if (opSnap.empty) {
+      const op = await getOperatorByCode(operatorCode);
+      if (!op) {
         setOperatorError('Invalid operator code. Please check and try again.');
         setIsVerifyingOperator(false);
         setOperatorVerified(false);
         return;
       }
 
-      const opDoc = opSnap.docs[0];
-      const opId = opDoc.id;
-      const opData = opDoc.data() as any;
-
-      setOperatorId(opId);
-      setOperatorName(opData.name || '');
+      setOperatorId(op.id);
+      setOperatorName(op.name || '');
       setOperatorVerified(true);
       setSelectedStopId(null);
     } catch (err) {

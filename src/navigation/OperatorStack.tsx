@@ -14,6 +14,13 @@ import DriverAttendance from '../screens/operator/DriverAttendance';
 import FeeManagement from '../screens/operator/FeeManagement';
 import CouponManager from '../screens/operator/CouponManager';
 import SendReminder from '../screens/operator/SendReminder';
+import RouteEditor from '../screens/operator/RouteEditor';
+import BusManager from '../screens/operator/BusManager';
+import AssignmentScheduler from '../screens/operator/AssignmentScheduler';
+import DriverManagement from '../screens/operator/DriverManagement';
+import RequestsScreen from '../screens/operator/RequestsScreen';
+
+import OperatorSettings from '../screens/operator/OperatorSettings';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -33,7 +40,7 @@ function OperatorTabs() {
             Fleet: '🗺️',
             Drivers: '🚗',
             Fees: '💰',
-            More: '⚙️',
+            Settings: '⚙️',
           };
           return (
             <View style={[styles.tabIcon, focused && styles.tabIconActive]}>
@@ -45,9 +52,9 @@ function OperatorTabs() {
     >
       <Tab.Screen name="Dashboard" component={OperatorHome} />
       <Tab.Screen name="Fleet" component={FleetMap} />
-      <Tab.Screen name="Drivers" component={DriverAttendance} />
+      <Tab.Screen name="Drivers" component={AssignmentScheduler} />
       <Tab.Screen name="Fees" component={FeeManagement} />
-      <Tab.Screen name="More" component={CouponManager} />
+      <Tab.Screen name="Settings" component={OperatorSettings} />
     </Tab.Navigator>
   );
 }
@@ -61,6 +68,12 @@ export function OperatorStack() {
       <Stack.Screen name="CouponManager" component={CouponManager} />
       <Stack.Screen name="SendReminder" component={SendReminder} />
       <Stack.Screen name="DriverAttendance" component={DriverAttendance} />
+      <Stack.Screen name="RouteEditor" component={RouteEditor} />
+      <Stack.Screen name="BusManager" component={BusManager} />
+      <Stack.Screen name="AssignmentScheduler" component={AssignmentScheduler} />
+      <Stack.Screen name="DriverManagement" component={DriverManagement} />
+      <Stack.Screen name="Requests" component={RequestsScreen} />
+      <Stack.Screen name="Settings" component={OperatorSettings} />
     </Stack.Navigator>
   );
 }

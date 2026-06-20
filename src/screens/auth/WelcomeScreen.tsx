@@ -143,6 +143,33 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ navigation }) => {
                 style={[styles.cardAccent, { backgroundColor: Colors.success }]}
               />
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.roleCard, styles.operatorCard]}
+              onPress={() => navigation.navigate('OperatorRegister')}
+              activeOpacity={0.85}
+            >
+              <View style={styles.cardContent}>
+                <View
+                  style={[
+                    styles.cardIcon,
+                    { backgroundColor: '#FFF3E0' },
+                  ]}
+                >
+                  <Text style={styles.cardEmoji}>🏢</Text>
+                </View>
+                <View style={styles.cardText}>
+                  <Text style={styles.cardTitle}>Register as Operator</Text>
+                  <Text style={styles.cardDescription}>
+                    Register your transport company and manage your fleet
+                  </Text>
+                </View>
+                <Text style={styles.cardArrow}>→</Text>
+              </View>
+              <View
+                style={[styles.cardAccent, { backgroundColor: '#FF9800' }]}
+              />
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -307,6 +334,7 @@ const styles = StyleSheet.create({
   },
   driverCard: {},
   parentCard: {},
+  operatorCard: {},
   cardContent: {
     flexDirection: 'row',
     alignItems: 'center',

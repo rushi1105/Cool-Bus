@@ -8,15 +8,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
 import {
   auth,
-  db,
   onAuthStateChanged,
   signOut,
   type FirebaseUser,
-  type User as UserProfile,
 } from '../services/firebase';
+import { onUserProfileSnapshot } from '../repositories/authRepository';
+import type { User as UserProfile } from '../repositories/types';
 import type { UserRole } from '../constants/config';
 
 interface UseAuthReturn {
@@ -42,7 +41,6 @@ export function useAuth(): UseAuthReturn {
     let unsubscribeSnapshot: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
-      // Clean up previous Firestore snapshot listener if any
       if (unsubscribeSnapshot) {
         unsubscribeSnapshot();
         unsubscribeSnapshot = null;
@@ -50,28 +48,24 @@ export function useAuth(): UseAuthReturn {
 
       if (firebaseUser) {
         setUser(firebaseUser);
-        
-        // Subscribe to real-time changes of user profile
-        unsubscribeSnapshot = onSnapshot(
-          doc(db, 'users', firebaseUser.uid),
-          (snapshot) => {
-            if (snapshot.exists()) {
-              const userDoc = { id: snapshot.id, ...snapshot.data() } as UserProfile;
+
+        unsubscribeSnapshot = onUserProfileSnapshot(
+          firebaseUser.uid,
+          (userDoc) => {
+            if (userDoc) {
               setProfile(userDoc);
               setRole(userDoc.role as UserRole);
             } else {
-              // Profile document does not exist yet (mid-registration)
               setProfile(null);
               setRole(null);
             }
             setLoading(false);
           },
-          (err) => {
-            console.error('[useAuth] Firestore onSnapshot error:', err);
+          () => {
             setProfile(null);
             setRole(null);
             setLoading(false);
-          }
+          },
         );
       } else {
         setUser(null);

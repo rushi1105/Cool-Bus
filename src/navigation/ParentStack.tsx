@@ -14,6 +14,7 @@ import TransactionHistory from '../screens/parent/TransactionHistory';
 import AddChild from '../screens/parent/AddChild';
 import NotificationsScreen from '../screens/parent/NotificationsScreen';
 import ParentProfile from '../screens/parent/ParentProfile';
+import RequestStopChange from '../screens/parent/RequestStopChange';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -57,6 +58,7 @@ export function ParentStack() {
       <Stack.Screen name="Payment" component={PaymentScreen} />
       <Stack.Screen name="AddChild" component={AddChild} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} />
+      <Stack.Screen name="RequestStopChange" component={RequestStopChange} />
     </Stack.Navigator>
   );
 }

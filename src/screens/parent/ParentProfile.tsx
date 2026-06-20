@@ -14,8 +14,9 @@ import {
 } from 'react-native';
 import Colors from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
-import { collection, query, where, onSnapshot, getDoc, doc } from 'firebase/firestore';
-import { db } from '../../services/firebase';
+import { onStudentsSnapshot } from '../../repositories/studentRepository';
+import { onParentFeesSnapshot } from '../../repositories/feeRepository';
+import { getRoute } from '../../repositories/routeRepository';
 
 interface ParentProfileProps {
   navigation: any;
@@ -53,20 +54,9 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
     setIsLoading(true);
     setError(null);
 
-    // Subscribe to students where parentId == profile.id
-    const studentQ = query(
-      collection(db, 'students'),
-      where('parentId', '==', profile.id)
-    );
-
-    const unsubscribeStudents = onSnapshot(
-      studentQ,
-      (snapshot) => {
-        const studentsList = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...docSnap.data(),
-        })) as any[];
-
+    const unsubscribeStudents = onStudentsSnapshot(
+      profile.id,
+      (studentsList) => {
         setStudents(studentsList);
         setIsLoading(false);
       },
@@ -77,20 +67,9 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
       }
     );
 
-    // Subscribe to fees where parentId == profile.id
-    const feesQ = query(
-      collection(db, 'fees'),
-      where('parentId', '==', profile.id)
-    );
-
-    const unsubscribeFees = onSnapshot(
-      feesQ,
-      (snapshot) => {
-        const feesList = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...docSnap.data(),
-        })) as any[];
-
+    const unsubscribeFees = onParentFeesSnapshot(
+      profile.id,
+      (feesList) => {
         const latestFees: Record<string, any> = {};
         feesList.forEach((fee) => {
           const studentId = fee.studentId;
@@ -100,8 +79,7 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
           if (!existingFee) {
             latestFees[studentId] = fee;
           } else {
-            // Compare billing months (format YYYY-MM) to resolve latest fee per child
-            if (fee.month > existingFee.month) {
+            if (fee.month > (existingFee as any).month) {
               latestFees[studentId] = fee;
             }
           }
@@ -136,9 +114,9 @@ export const ParentProfile: React.FC<ParentProfileProps> = () => {
       await Promise.all(
         newRoutesToFetch.map(async (routeId) => {
           try {
-            const snap = await getDoc(doc(db, 'routes', routeId));
-            if (snap.exists()) {
-              newRoutes[routeId] = snap.data();
+            const route = await getRoute(routeId);
+            if (route) {
+              newRoutes[routeId] = route;
             }
           } catch (err) {
             console.error('[ParentProfile] Error fetching route:', routeId, err);

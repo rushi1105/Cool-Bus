@@ -1,12 +1,4 @@
-/**
- * DriverHome Screen
- *
- * Ola/Uber inspired full-screen map with 5 floating layers.
- * Slide-to-start trip via PanResponder, real-time Firestore location updates,
- * stop markers with gray-out visited states, and emergency SOS button.
- */
-
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -17,37 +9,48 @@ import {
   TouchableOpacity,
   Animated,
   PanResponder,
+  Platform,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import * as Location from 'expo-location';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  addDoc,
-  updateDoc,
-  doc,
-  getDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db, auth } from '../../services/firebase';
+import * as ExpoLocation from 'expo-location';
+import { auth } from '../../services/firebase';
 import { signOut } from 'firebase/auth';
+import { getBus, updateBus } from '../../repositories/fleetRepository';
+import { getStudentsByBus } from '../../repositories/studentRepository';
+import { getRoute } from '../../repositories/routeRepository';
+import { getDriverById } from '../../repositories/userRepository';
+import { fetchOperator } from '../../repositories/operatorRepository';
+import {
+  startTrip as createTripRecord,
+  endTrip as completeTrip,
+  addRoutePoints,
+} from '../../repositories/tripRepository';
+import { addNotification } from '../../repositories/notificationRepository';
+import { createAlert } from '../../repositories/alertRepository';
+import { getOperatorAssignmentsByDate } from '../../repositories/assignmentRepository';
 import {
   requestLocationPermissions,
-  startTracking,
-  stopTracking,
-  getDistance,
+  startGpsTracking,
+  getCurrentPosition,
+  addToOfflineQueue,
+  flushOfflineQueue,
+  clearOfflineQueue,
+  type GpsPoint,
   type LocationCoords,
-} from '../../services/location';
+} from '../../services/gps/location';
+import { haversineDistance } from '../../services/gps/distance';
 import { useAuth } from '../../hooks/useAuth';
 import Colors from '../../constants/colors';
+import type { Assignment, Route as RouteType } from '../../repositories/types';
+
+function todayString(): string {
+  return new Date().toISOString().split('T')[0];
+}
 
 export const DriverHome: React.FC = () => {
   const { user, profile } = useAuth();
   const mapRef = useRef<MapView>(null);
 
-  // States
   const [tripActive, setTripActive] = useState(false);
   const [tripStartTime, setTripStartTime] = useState<Date | null>(null);
   const [tripId, setTripId] = useState<string>('');
@@ -59,48 +62,79 @@ export const DriverHome: React.FC = () => {
   const [locationSubscription, setLocationSubscription] = useState<any>(null);
   const [initialRegion, setInitialRegion] = useState<any>(null);
   const [trackWidth, setTrackWidth] = useState(0);
+  const [assignment, setAssignment] = useState<Assignment | null>(null);
+  const [routeData, setRouteData] = useState<RouteType | null>(null);
+  const [loadingAssignment, setLoadingAssignment] = useState(true);
 
   const thumbX = useRef(new Animated.Value(0)).current;
-
-  // Refs for tracking callback to avoid stale closures
   const stopsRef = useRef<any[]>([]);
   const busStudentsRef = useRef<any[]>([]);
   const visitedStopsRef = useRef<number[]>([]);
+  const routePointsRef = useRef<GpsPoint[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // PanResponder to manage the slide-to-start thumb using trackWidth state
-  const panResponder = useMemo(() => {
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderMove: (_, gestureState) => {
-        const newX = Math.max(0, Math.min(gestureState.dx, trackWidth - 56));
-        thumbX.setValue(newX);
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dx >= trackWidth * 0.75) {
-          Animated.spring(thumbX, {
-            toValue: trackWidth - 56,
-            useNativeDriver: false,
-          }).start(async () => {
-            await startTrip();
-          });
-        } else {
-          Animated.spring(thumbX, {
-            toValue: 0,
-            useNativeDriver: false,
-          }).start();
-        }
-      }
-    });
-  }, [trackWidth, profile, user]);
-
-  // Get current location on mount if permission is already granted
+  // Load today's assignment on mount
   useEffect(() => {
-    const initializeLocation = async () => {
+    const loadAssignment = async () => {
+      if (!profile?.operatorId || !user?.uid) {
+        setLoadingAssignment(false);
+        return;
+      }
       try {
-        const { status } = await Location.getForegroundPermissionsAsync();
+        const asgns = await getOperatorAssignmentsByDate(profile.operatorId, todayString());
+        const myAsgn = asgns.find(
+          (a) => a.driverId === user.uid && (a.status === 'SCHEDULED' || a.status === 'IN_PROGRESS'),
+        );
+        setAssignment(myAsgn || null);
+
+        if (myAsgn) {
+          const route = await getRoute(myAsgn.routeId);
+          setRouteData(route || null);
+        }
+      } catch (err) {
+        console.error('[DriverHome] Load assignment error:', err);
+      } finally {
+        setLoadingAssignment(false);
+      }
+    };
+    loadAssignment();
+  }, [profile?.operatorId, user?.uid]);
+
+  // Resume from active trip if assignment is IN_PROGRESS
+  useEffect(() => {
+    if (!assignment || assignment.status !== 'IN_PROGRESS' || !profile?.busId) return;
+
+    const busId = profile.busId;
+    const loadActiveState = async () => {
+      const busData = await getBus(busId);
+      if (!busData) return;
+
+      const route = routeData;
+      if (route) {
+        const sorted = route.stops.map((s, i) => ({ ...s, order: i }));
+        setStops(sorted);
+        stopsRef.current = sorted;
+      }
+
+      setTripId(assignment.id);
+      setTripActive(true);
+      setTripStartTime(new Date());
+
+      const students = await getStudentsByBus(busId);
+      setBusStudents(students);
+      busStudentsRef.current = students;
+    };
+    loadActiveState();
+  }, [assignment, routeData, profile?.busId]);
+
+  // Get initial location
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await ExpoLocation.getForegroundPermissionsAsync();
         if (status === 'granted') {
-          const position = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
+          const position = await ExpoLocation.getCurrentPositionAsync({
+            accuracy: ExpoLocation.Accuracy.Balanced,
           });
           setInitialRegion({
             latitude: position.coords.latitude,
@@ -117,23 +151,17 @@ export const DriverHome: React.FC = () => {
           });
           return;
         }
-      } catch (err) {
-        console.error('[DriverHome] Error checking location/permission:', err);
-      }
-
-      // Fallback region (MH05 area) if permission not granted or call fails
+      } catch {}
       setInitialRegion({
         latitude: 19.1873,
         longitude: 73.1927,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       });
-    };
-
-    initializeLocation();
+    })();
   }, []);
 
-  // Trip Elapsed Timer
+  // Trip timer
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     if (tripActive && tripStartTime) {
@@ -143,227 +171,290 @@ export const DriverHome: React.FC = () => {
         const mins = Math.floor((diff % 3600000) / 60000);
         const secs = Math.floor((diff % 60000) / 1000);
         setElapsedTime(
-          `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+          `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`,
         );
       }, 1000);
     }
     return () => clearInterval(interval);
   }, [tripActive, tripStartTime]);
 
-  // Proximity Alert Checker
-  const checkProximity = (latitude: number, longitude: number) => {
-    const busId = profile?.busId;
-    if (!busId) return;
-
-    setVisitedStops((currentVisited) => {
-      let updatedVisited = [...currentVisited];
-      let hasChanges = false;
-
-      stopsRef.current.forEach((stop) => {
-        const stopOrder = stop.order;
-        if (typeof stopOrder !== 'number') return;
-        if (updatedVisited.includes(stopOrder)) return;
-
-        const stopLat = stop.latitude ?? stop.lat;
-        const stopLng = stop.longitude ?? stop.lng;
-        if (!stopLat || !stopLng) return;
-
-        const distance = getDistance(
-          { latitude, longitude },
-          { latitude: stopLat, longitude: stopLng }
+  // Flush route points to Firestore every 30s
+  useEffect(() => {
+    if (!tripActive || !tripId) return;
+    flushTimerRef.current = setInterval(async () => {
+      const points = routePointsRef.current;
+      if (points.length === 0) return;
+      routePointsRef.current = [];
+      try {
+        await addRoutePoints(
+          tripId,
+          points.map((p) => ({
+            latitude: p.latitude,
+            longitude: p.longitude,
+            timestamp: p.timestamp,
+            speed: p.speed,
+          })),
         );
+      } catch {
+        routePointsRef.current = [...points, ...routePointsRef.current];
+      }
+    }, 30000);
+    return () => {
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
+    };
+  }, [tripActive, tripId]);
 
-        if (distance < 50) {
-          updatedVisited.push(stopOrder);
-          hasChanges = true;
-
-          // Notify parents assigned to this bus and this stop using the cached list
-          busStudentsRef.current.forEach((student) => {
-            if (
-              student.stopLocation &&
-              (student.stopLocation.label === stop.name ||
-                getDistance(student.stopLocation, { latitude: stopLat, longitude: stopLng }) < 100)
-            ) {
-              addDoc(collection(db, 'notifications'), {
-                userId: student.parentId,
-                type: 'info',
-                message: `Bus has arrived at ${stop.name}`,
-                timestamp: serverTimestamp(),
-                read: false,
-                createdAt: serverTimestamp(),
-              }).catch((err) => console.error('Error creating notification:', err));
-            }
-          });
-
-          // Show toast/alert
-          Alert.alert('Stop Reached', `Arrived at ${stop.name}`);
+  // Flush offline queue periodically
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      await flushOfflineQueue(async (points) => {
+        if (tripId) {
+          await addRoutePoints(
+            tripId,
+            points.map((p) => ({
+              latitude: p.latitude,
+              longitude: p.longitude,
+              timestamp: p.timestamp,
+              speed: p.speed,
+            })),
+          );
         }
       });
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [tripId]);
 
-      if (hasChanges) {
-        // Write to Firestore /buses/{busId}
-        updateDoc(doc(db, 'buses', busId), {
-          visitedStops: updatedVisited,
-        }).catch((e) => console.error('Error updating visitedStops on bus:', e));
+  const checkProximity = useCallback(
+    (latitude: number, longitude: number) => {
+      const busId = profile?.busId;
+      if (!busId) return;
 
-        // Sync the ref
-        visitedStopsRef.current = updatedVisited;
+      setVisitedStops((currentVisited) => {
+        let updatedVisited = [...currentVisited];
+        let hasChanges = false;
 
-        // All stops visited check
-        if (updatedVisited.length === stopsRef.current.length) {
-          console.log('All stops visited');
-          updateDoc(doc(db, 'buses', busId), {
-            allStopsVisited: true,
-          }).catch((e) => console.error('Error updating allStopsVisited on bus:', e));
+        stopsRef.current.forEach((stop) => {
+          const stopOrder = stop.order;
+          if (typeof stopOrder !== 'number') return;
+          if (updatedVisited.includes(stopOrder)) return;
+
+          const stopLat = stop.latitude ?? stop.lat;
+          const stopLng = stop.longitude ?? stop.lng;
+          if (!stopLat || !stopLng) return;
+
+          const distance = haversineDistance(
+            { latitude, longitude },
+            { latitude: stopLat, longitude: stopLng },
+          );
+
+          if (distance < 50) {
+            updatedVisited.push(stopOrder);
+            hasChanges = true;
+
+            busStudentsRef.current.forEach((student) => {
+              if (
+                student.stopLocation &&
+                (student.stopLocation.label === stop.name ||
+                  haversineDistance(student.stopLocation, {
+                    latitude: stopLat,
+                    longitude: stopLng,
+                  }) < 100)
+              ) {
+                addNotification({
+                  userId: student.parentId,
+                  type: 'info',
+                  title: 'Bus Arrived',
+                  message: `Bus has arrived at ${stop.name}`,
+                  read: false,
+                }).catch(() => {});
+              }
+            });
+
+            Alert.alert('Stop Reached', `Arrived at ${stop.name}`);
+          }
+        });
+
+        if (hasChanges) {
+          updateBus(busId, { visitedStops: updatedVisited }).catch(() => {});
+          visitedStopsRef.current = updatedVisited;
+
+          if (updatedVisited.length === stopsRef.current.length) {
+            updateBus(busId, { allStopsVisited: true }).catch(() => {});
+          }
+
+          return updatedVisited;
         }
+        return currentVisited;
+      });
+    },
+    [profile?.busId],
+  );
 
-        return updatedVisited;
-      }
-      return currentVisited;
-    });
-  };
-
-  // Start Trip Logic (Detailed error checking and alerts)
-  const startTrip = async () => {
+  const startTrip = useCallback(async () => {
     try {
-      // Step 1: Check permissions
+      if (!assignment) {
+        Alert.alert('No Assignment', 'You have no scheduled assignment for today.');
+        Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
+        return;
+      }
+
       const hasPermission = await requestLocationPermissions();
       if (!hasPermission) {
-        Alert.alert(
-          'Permission Required',
-          'Please enable location access in Settings to start a trip.'
-        );
-        // Reset slider
-        Animated.spring(thumbX, {
-          toValue: 0,
-          useNativeDriver: false,
-        }).start();
+        Alert.alert('Permission Required', 'Enable location access to start a trip.');
+        Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
         return;
       }
 
-      // Step 2: Get busId from profile
       const busId = profile?.busId;
       if (!busId) {
-        Alert.alert(
-          'Error',
-          'No bus assigned to your account. Please contact your operator.'
-        );
-        Animated.spring(thumbX, {
-          toValue: 0,
-          useNativeDriver: false,
-        }).start();
+        Alert.alert('Error', 'No bus assigned. Contact your operator.');
+        Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
         return;
       }
 
-      // Step 3: Load stops from bus doc FIRST
-      const busDoc = await getDoc(doc(db, 'buses', busId));
-      let stopsList: any[] = [];
-      if (busDoc.exists()) {
-        const busData = busDoc.data();
-        stopsList = (busData.stops || []).sort((a: any, b: any) => a.order - b.order);
-        setStops(stopsList);
-        stopsRef.current = stopsList;
+      const route = routeData;
+      if (!route) {
+        Alert.alert('Error', 'Route not found. Contact your operator.');
+        Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
+        return;
       }
+
+      const stopsList = route.stops.map((s, i) => ({ ...s, order: i }));
+      setStops(stopsList);
+      stopsRef.current = stopsList;
       setVisitedStops([]);
       visitedStopsRef.current = [];
+      routePointsRef.current = [];
+      await clearOfflineQueue();
 
-      // Step 4: Load students linked to this bus once
-      const studentQ = query(collection(db, 'students'), where('busId', '==', busId));
-      const studentSnap = await getDocs(studentQ);
-      const studentsList = studentSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const studentsList = await getStudentsByBus(busId);
       setBusStudents(studentsList);
       busStudentsRef.current = studentsList;
 
-      // Step 5: Start GPS tracking with callback
-      const subscription = await startTracking(
-        busId,
-        user?.uid || '',
-        (location) => {
-          // Update local map position
-          setCurrentLocation({
-            latitude: location.latitude,
-            longitude: location.longitude,
-            heading: 0,
-            speed: location.speed,
-            accuracy: 0,
-          });
+      const busData = await getBus(busId);
+      const driverData = await getDriverById(user?.uid || '');
+      const operatorData = await fetchOperator(profile?.operatorId || '');
 
-          // Run proximity check against all stops
-          checkProximity(location.latitude, location.longitude);
-        }
-      );
-      if (!subscription) {
-        Alert.alert('Error', 'Failed to start GPS tracking.');
-        Animated.spring(thumbX, {
-          toValue: 0,
-          useNativeDriver: false,
-        }).start();
-        return;
-      }
-      setLocationSubscription(subscription);
-
-      // Step 6: Create trip in Firestore
-      const tripRef = await addDoc(collection(db, 'trips'), {
+      const tripIdResult = await createTripRecord({
+        assignmentId: assignment.id,
         busId,
         driverId: user?.uid || '',
         operatorId: profile?.operatorId || '',
-        startTime: serverTimestamp(),
-        status: 'active',
-        createdAt: serverTimestamp(),
+        routeId: route.id,
+        routeSnapshot: {
+          id: route.id,
+          data: route as unknown as Record<string, unknown>,
+        },
+        driverSnapshot: {
+          id: user?.uid || '',
+          data: (driverData || {}) as Record<string, unknown>,
+        },
+        busSnapshot: {
+          id: busId,
+          data: (busData || {}) as Record<string, unknown>,
+        },
+        operatorSnapshot: {
+          id: profile?.operatorId || '',
+          data: (operatorData || {}) as Record<string, unknown>,
+        },
       });
-      setTripId(tripRef.id);
 
-      // Step 7: Update bus doc
-      await updateDoc(doc(db, 'buses', busId), {
+      setTripId(tripIdResult);
+
+      // Shim: write legacy fields
+      await updateBus(busId, {
         isActive: true,
+        driverId: user?.uid || '',
         visitedStops: [],
         allStopsVisited: false,
-        lastUpdated: serverTimestamp(),
       });
+
+      const subscription = startGpsTracking(
+        (point) => {
+          setCurrentLocation({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            heading: point.heading,
+            speed: point.speed,
+            accuracy: point.accuracy,
+          });
+
+          // Shim: keep currentLocation on bus
+          updateBus(busId, {
+            currentLocation: { latitude: point.latitude, longitude: point.longitude },
+            speed: point.speed,
+          }).catch(() => {});
+
+          checkProximity(point.latitude, point.longitude);
+
+          // Add to route points and offline queue
+          routePointsRef.current.push(point);
+          addToOfflineQueue(point);
+        },
+        () => {},
+      );
+      setLocationSubscription(subscription);
 
       setTripActive(true);
       setTripStartTime(new Date());
 
-      // Step 8: Notify parents assigned to this bus (using the studentsList preloaded in Step 4)
+      // Notify parents
       const parentIds = [...new Set(studentsList.map((s: any) => s.parentId))];
       for (const parentId of parentIds) {
-        addDoc(collection(db, 'notifications'), {
+        addNotification({
           userId: parentId,
           type: 'info',
+          title: 'Trip Started',
           message: "Your child's bus has started",
-          timestamp: serverTimestamp(),
           read: false,
-          createdAt: serverTimestamp(),
         }).catch(() => {});
       }
-
     } catch (error: any) {
       console.error('startTrip error:', error);
-      Alert.alert('Error', 'Failed to start trip: ' + error.message);
-      Animated.spring(thumbX, {
-        toValue: 0,
-        useNativeDriver: false,
-      }).start();
+      Alert.alert('Error', 'Failed to start trip: ' + (error?.message || 'Unknown'));
+      Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
     }
-  };
+  }, [assignment, routeData, profile, user, checkProximity]);
 
-  // End Trip Logic
-  const endTrip = async () => {
+  const endTrip = useCallback(async () => {
     const busId = profile?.busId || `bus-${user?.uid}`;
 
     try {
       if (locationSubscription) {
-        await stopTracking(locationSubscription, busId);
+        await locationSubscription.remove();
         setLocationSubscription(null);
       }
 
+      // Flush remaining route points
+      const remainingPoints = routePointsRef.current;
+      routePointsRef.current = [];
+
       if (tripId) {
-        await updateDoc(doc(db, 'trips', tripId), {
-          endTime: serverTimestamp(),
-          status: 'completed',
-          updatedAt: serverTimestamp(),
-        });
+        await completeTrip(
+          tripId,
+          remainingPoints.map((p) => ({
+            latitude: p.latitude,
+            longitude: p.longitude,
+            timestamp: p.timestamp,
+            speed: p.speed,
+          })),
+        );
       }
+
+      // Flush offline queue
+      await flushOfflineQueue(async (points) => {
+        if (tripId) {
+          await addRoutePoints(
+            tripId,
+            points.map((p) => ({
+              latitude: p.latitude,
+              longitude: p.longitude,
+              timestamp: p.timestamp,
+              speed: p.speed,
+            })),
+          );
+        }
+      });
 
       setTripActive(false);
       setTripStartTime(null);
@@ -373,59 +464,80 @@ export const DriverHome: React.FC = () => {
       setVisitedStops([]);
       setBusStudents([]);
       thumbX.setValue(0);
-
       stopsRef.current = [];
       visitedStopsRef.current = [];
       busStudentsRef.current = [];
 
-      await updateDoc(doc(db, 'buses', busId), {
+      // Shim: update bus
+      await updateBus(busId, {
+        isActive: false,
         visitedStops: [],
         allStopsVisited: false,
       });
     } catch (err) {
       console.error('[DriverHome] endTrip error:', err);
     }
-  };
+  }, [tripId, locationSubscription, profile?.busId, user?.uid]);
 
-  // SOS Emergency Alert Trigger
-  const handleSOS = () => {
+  const handleSOS = useCallback(() => {
     Alert.alert('Send SOS Alert?', 'This will notify your operator immediately.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Confirm',
         style: 'destructive',
         onPress: async () => {
-          const busId = profile?.busId || `bus-${user?.uid}`;
           try {
-            await addDoc(collection(db, 'alerts'), {
+            await createAlert({
               driverId: user?.uid,
-              busId,
-              timestamp: serverTimestamp(),
+              busId: profile?.busId || '',
               location: currentLocation
-                ? {
-                    latitude: currentLocation.latitude,
-                    longitude: currentLocation.longitude,
-                  }
+                ? { latitude: currentLocation.latitude, longitude: currentLocation.longitude }
                 : null,
               status: 'active',
-              createdAt: serverTimestamp(),
             });
             Alert.alert('SOS Transmitted', 'Your operator has been notified.');
-          } catch (err) {
-            console.error('[DriverHome] SOS error:', err);
-            Alert.alert('Error', 'Failed to send SOS. Please try again.');
+          } catch {
+            Alert.alert('Error', 'Failed to send SOS.');
           }
         },
       },
     ]);
-  };
+  }, [currentLocation, profile?.busId, user?.uid]);
 
-  if (!initialRegion) {
+  const panResponder = useMemo(() => {
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, gestureState) => {
+        const newX = Math.max(0, Math.min(gestureState.dx, trackWidth - 56));
+        thumbX.setValue(newX);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx >= trackWidth * 0.75) {
+          Animated.spring(thumbX, {
+            toValue: trackWidth - 56,
+            useNativeDriver: false,
+          }).start(async () => {
+            if (tripActive) {
+              await endTrip();
+            } else {
+              await startTrip();
+            }
+          });
+        } else {
+          Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
+        }
+      },
+    });
+  }, [trackWidth, tripActive, startTrip, endTrip]);
+
+  if (loadingAssignment || !initialRegion) {
     return (
       <View style={styles.loadingContainer}>
         <StatusBar barStyle="dark-content" />
         <ActivityIndicator size="large" color="#000000" />
-        <Text style={styles.loadingText}>Getting your location...</Text>
+        <Text style={styles.loadingText}>
+          {loadingAssignment ? 'Loading schedule...' : 'Getting your location...'}
+        </Text>
       </View>
     );
   }
@@ -434,19 +546,16 @@ export const DriverHome: React.FC = () => {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
-      {/* LAYER 1 — MapView (base, fills entire screen) */}
       <MapView
         ref={mapRef}
         style={styles.map}
         provider={PROVIDER_GOOGLE}
         initialRegion={initialRegion}
-        showsUserLocation={true}
-        followsUserLocation={true}
-        mapType="standard"
+        showsUserLocation
+        followsUserLocation
         showsMyLocationButton={false}
         showsCompass={false}
       >
-        {/* Stops markers */}
         {tripActive &&
           stops.map((stop, index) => {
             const stopId = stop.id || stop.name || index.toString();
@@ -454,16 +563,12 @@ export const DriverHome: React.FC = () => {
             const isNext = stops.find((s) => !visitedStops.includes(s.order))?.name === stop.name;
             const stopLat = stop.latitude ?? stop.lat;
             const stopLng = stop.longitude ?? stop.lng;
-
             if (!stopLat || !stopLng) return null;
 
             return (
               <Marker
                 key={stopId}
-                coordinate={{
-                  latitude: stopLat,
-                  longitude: stopLng,
-                }}
+                coordinate={{ latitude: stopLat, longitude: stopLng }}
                 title={stop.name}
                 description={isVisited ? 'Visited ✓' : isNext ? 'Next Stop' : ''}
               >
@@ -483,14 +588,12 @@ export const DriverHome: React.FC = () => {
           })}
       </MapView>
 
-      {/* LAYER 2 — Header pill (floating, top of screen) */}
       <View style={styles.headerPill}>
         <Text style={styles.headerPillText}>
           {profile?.name || 'Driver'} • {profile?.busNumber || 'Bus'}
         </Text>
       </View>
 
-      {/* LAYER 3 — Trip timer (floating top-left to avoid logout overlap) */}
       {tripActive && (
         <View style={styles.timerPill}>
           <View style={styles.timerDot} />
@@ -498,160 +601,145 @@ export const DriverHome: React.FC = () => {
         </View>
       )}
 
-      {/* Logout button (Floating top-right) */}
       <TouchableOpacity
         style={styles.logoutButton}
         onPress={() => {
-          Alert.alert(
-            'Logout',
-            'Are you sure you want to logout?',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Logout',
-                style: 'destructive',
-                onPress: () => {
-                  signOut(auth);
-                },
-              },
-            ]
-          );
+          Alert.alert('Logout', 'Are you sure you want to logout?', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Logout', onPress: () => signOut(auth) },
+          ]);
         }}
-        activeOpacity={0.8}
       >
         <Text style={styles.logoutButtonText}>Logout</Text>
       </TouchableOpacity>
 
-      {/* LAYER 4 — SOS button (floating bottom-right, shifted above tab bar) */}
-      <TouchableOpacity
-        style={styles.sosButton}
-        onPress={handleSOS}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.sosText}>!</Text>
+      {/* SOS Button */}
+      <TouchableOpacity style={styles.sosButton} onPress={handleSOS}>
+        <Text style={styles.sosButtonText}>SOS</Text>
       </TouchableOpacity>
 
-      {/* LAYER 5 — Trip control card (floating bottom, shifted to bottom: 96) */}
-      <View style={styles.tripControlCard}>
-        {!tripActive ? (
-          <View style={styles.sliderWrapper}>
-            <Text style={styles.sliderLabel}>Slide to start trip</Text>
-            <View
-              style={styles.sliderTrack}
-              onLayout={(e) => {
-                setTrackWidth(e.nativeEvent.layout.width);
-              }}
-              pointerEvents={trackWidth === 0 ? 'none' : 'auto'}
-            >
-              <Animated.View
-                style={[
-                  styles.sliderThumb,
-                  {
-                    transform: [{ translateX: thumbX }],
-                  },
-                ]}
-                {...panResponder.panHandlers}
-              >
-                <Text style={styles.sliderThumbIcon}>→</Text>
-              </Animated.View>
-            </View>
+      {/* Stop Count Pill */}
+      {tripActive && stops.length > 0 && (
+        <View style={styles.stopCountPill}>
+          <Text style={styles.stopCountText}>
+            {visitedStops.length}/{stops.length} stops
+          </Text>
+        </View>
+      )}
+
+      {/* Assignment warning */}
+      {!tripActive && !assignment && (
+        <View style={styles.noAssignmentBanner}>
+          <Text style={styles.noAssignmentText}>
+            No scheduled trip for today. Contact your operator.
+          </Text>
+        </View>
+      )}
+
+      {/* Bottom Slide-to-Start / End */}
+      <View
+        style={styles.slideContainer}
+        onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+      >
+        <View style={styles.slideTrack}>
+          <View style={styles.slideTrackInner}>
+            <Text style={styles.slideTrackText}>
+              {tripActive ? 'Slide to end trip' : 'Slide to start trip'}
+            </Text>
           </View>
-        ) : (
-          <TouchableOpacity
-            style={styles.endTripButton}
-            onPress={() => {
-              Alert.alert('End trip?', 'Are you sure you want to end the trip?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'End Trip', style: 'destructive', onPress: endTrip },
-              ]);
-            }}
-            activeOpacity={0.85}
+          <Animated.View
+            style={[
+              styles.slideThumb,
+              { transform: [{ translateX: thumbX }] },
+            ]}
+            {...panResponder.panHandlers}
           >
-            <Text style={styles.endTripText}>End Trip</Text>
-          </TouchableOpacity>
-        )}
+            <Text style={styles.slideThumbText}>
+              {tripActive ? '⏹' : '▶'}
+            </Text>
+          </Animated.View>
+        </View>
       </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  center: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#F9F9F9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#666',
+  },
+  container: {
+    flex: 1,
+  },
+  map: {
+    flex: 1,
+  },
+  stopMarker: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 3,
+    borderColor: '#4A90D9',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 15,
-    color: Colors.textSecondary,
-    fontWeight: '500',
+  stopMarkerVisited: {
+    backgroundColor: '#4CAF50',
+    borderColor: '#388E3C',
   },
-  map: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  stopMarkerNext: {
+    borderColor: '#FF9800',
+    borderWidth: 4,
+  },
+  stopMarkerText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#333',
   },
   headerPill: {
     position: 'absolute',
-    top: 48,
+    top: 50,
     alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    borderRadius: 999,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
   },
   headerPillText: {
-    color: '#ffffff',
+    color: '#fff',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   timerPill: {
     position: 'absolute',
-    top: 48,
+    top: 50,
     left: 16,
-    backgroundColor: '#000000',
-    borderRadius: 999,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    zIndex: 10,
   },
   timerDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Colors.error,
+    backgroundColor: '#4CAF50',
+    marginRight: 8,
   },
   timerText: {
-    color: '#ffffff',
+    color: '#fff',
     fontSize: 14,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
@@ -660,129 +748,104 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 48,
     right: 16,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    zIndex: 999,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
   logoutButtonText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '600',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
   sosButton: {
     position: 'absolute',
-    bottom: 176,
+    bottom: 160,
     right: 16,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#EF4444',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#E53935',
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 10,
-    shadowColor: '#EF4444',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    zIndex: 10,
-  },
-  sosText: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  tripControlCard: {
-    position: 'absolute',
-    bottom: 96,
-    left: 16,
-    right: 16,
-    backgroundColor: '#000000',
-    borderRadius: 24,
-    padding: 20,
-    marginHorizontal: 16,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
+    shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 20,
-    zIndex: 10,
+    shadowRadius: 6,
   },
-  sliderWrapper: {
-    width: '100%',
-  },
-  sliderLabel: {
-    color: '#AAAAAA',
+  sosButtonText: {
+    color: '#fff',
     fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 10,
-    textAlign: 'center',
+    fontWeight: '800',
   },
-  sliderTrack: {
-    backgroundColor: '#2A2A2A',
-    height: 60,
-    borderRadius: 30,
-    width: '100%',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  sliderThumb: {
+  stopCountPill: {
     position: 'absolute',
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    bottom: 200,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
   },
-  sliderThumbIcon: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#000000',
-  },
-  endTripButton: {
-    backgroundColor: '#EF4444',
-    borderRadius: 30,
-    paddingVertical: 18,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  endTripText: {
-    color: '#ffffff',
-    fontSize: 16,
+  stopCountText: {
+    color: '#fff',
+    fontSize: 13,
     fontWeight: '700',
   },
-  stopMarker: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#000000',
+  noAssignmentBanner: {
+    position: 'absolute',
+    bottom: 200,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,152,0,0.9)',
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginHorizontal: 20,
+  },
+  noAssignmentText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  slideContainer: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 40 : 20,
+    left: 16,
+    right: 16,
+  },
+  slideTrack: {
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#1a1a2e',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  slideTrackInner: {
+    alignItems: 'center',
+  },
+  slideTrackText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    opacity: 0.6,
+  },
+  slideThumb: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#4A90D9',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#ffffff',
-    elevation: 3,
+    elevation: 4,
   },
-  stopMarkerVisited: {
-    backgroundColor: '#888888',
-  },
-  stopMarkerNext: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 4,
-  },
-  stopMarkerText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
+  slideThumbText: {
+    fontSize: 20,
+    color: '#fff',
   },
 });
 

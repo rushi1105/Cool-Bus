@@ -7,8 +7,7 @@
 
 import * as Location from 'expo-location';
 import { Platform } from 'react-native';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from './firebase';
+import { updateBus } from '../repositories/fleetRepository';
 
 export interface LocationCoords {
   latitude: number;
@@ -95,16 +94,14 @@ export async function startTracking(
         accuracy: location.coords.accuracy ?? 0,
       };
 
-      // Write to Firestore
       try {
-        await updateDoc(doc(db, 'buses', busId), {
+        await updateBus(busId, {
           currentLocation: {
             latitude: coords.latitude,
             longitude: coords.longitude,
           },
           speed: coords.speed || 0,
           isActive: true,
-          lastUpdated: serverTimestamp(),
         });
       } catch (err) {
         console.error('[Location] Firestore write error:', err);
@@ -134,10 +131,7 @@ export async function stopTracking(
   subscription.remove();
 
   try {
-    await updateDoc(doc(db, 'buses', busId), {
-      isActive: false,
-      lastUpdated: serverTimestamp(),
-    });
+    await updateBus(busId, { isActive: false });
   } catch (err) {
     console.error('[Location] Stop tracking Firestore error:', err);
   }

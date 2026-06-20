@@ -17,8 +17,8 @@ import {
 import Colors from '../../constants/colors';
 import { useFeeStatus } from '../../hooks/useFeeStatus';
 import { useAuth } from '../../hooks/useAuth';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db, type Student } from '../../services/firebase';
+import { getStudentsByParent } from '../../repositories/studentRepository';
+import type { Student } from '../../repositories/types';
 
 interface PaymentScreenProps {
   navigation: any;
@@ -32,13 +32,9 @@ export const PaymentScreen: React.FC<PaymentScreenProps> = ({ navigation }) => {
     if (!user?.uid) return;
     const loadStudent = async () => {
       try {
-        const q = query(
-          collection(db, 'students'),
-          where('parentId', '==', user.uid)
-        );
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          setStudent({ id: snap.docs[0].id, ...snap.docs[0].data() } as Student);
+        const students = await getStudentsByParent(user.uid);
+        if (students.length > 0) {
+          setStudent(students[0]);
         }
       } catch (err) {
         console.error('Error loading student for payment:', err);

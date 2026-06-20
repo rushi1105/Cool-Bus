@@ -7,16 +7,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  updateDoc,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { db, type Fee } from '../services/firebase';
+import { getFees, payFee as repoPayFee } from '../repositories/feeRepository';
+import type { Fee } from '../repositories/types';
 
 export interface FeeBreakdown {
   busFee: number;
@@ -67,17 +59,7 @@ export function useFeeStatus(
 
     setIsLoading(true);
     try {
-      // Fetch all fees for this parent
-      const q = query(
-        collection(db, 'fees'),
-        where('parentId', '==', parentId),
-      );
-      const snap = await getDocs(q);
-      const allFees = snap.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-      })) as Fee[];
-
+      const allFees = await getFees(parentId);
       setFees(allFees);
 
       // Find current month fee for this student (or any if no studentId)
@@ -103,10 +85,7 @@ export function useFeeStatus(
 
   const payFee = useCallback(async (feeId: string) => {
     try {
-      await updateDoc(doc(db, 'fees', feeId), {
-        status: 'PAID',
-        paidAt: serverTimestamp(),
-      });
+      await repoPayFee(feeId);
       await loadFees();
       return true;
     } catch (err) {

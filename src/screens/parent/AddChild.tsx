@@ -8,7 +8,11 @@ import Colors from '../../constants/colors';
 import CouponInput from '../../components/CouponInput';
 import { useCoupon } from '../../hooks/useCoupon';
 import { useAuth } from '../../hooks/useAuth';
-import { getUserByUid, getOperatorByCode, getStudentCountByParent, addStudentDoc, createFeeDoc, User } from '../../services/firebase';
+import { getUserByUid } from '../../repositories/authRepository';
+import { getOperatorByCode } from '../../repositories/operatorRepository';
+import { getStudentCountByParent, addStudentDoc } from '../../repositories/studentRepository';
+import { createFeeDoc } from '../../repositories/feeRepository';
+import type { User } from '../../repositories/types';
 
 interface AddChildProps {
   navigation: any;

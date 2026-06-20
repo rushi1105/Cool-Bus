@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { getRoutesByOperator, getActiveRoutes } from '../repositories/routeRepository';
+import { fetchOperatorNames } from '../repositories/operatorRepository';
 import { getDistance } from '../services/location';
 import { buildDedupKey } from '../utils/stopUtils';
 import Config from '../constants/config';
+import type { Route, RouteStop } from '../repositories/types';
 
 export interface OperatorInfo {
   operatorId: string;
@@ -25,27 +26,6 @@ export interface StopCandidate {
   walkingMinutes: number;
 }
 
-interface RouteStop {
-  id?: string;
-  order?: number;
-  name: string;
-  latitude: number;
-  longitude: number;
-  landmark?: string;
-  address?: string;
-}
-
-interface RouteData {
-  name?: string;
-  operatorId?: string;
-  stops?: RouteStop[];
-}
-
-interface OperatorData {
-  name?: string;
-  code?: string;
-}
-
 export function useStopsForOperator(operatorId?: string) {
   const [stops, setStops] = useState<StopCandidate[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,30 +37,24 @@ export function useStopsForOperator(operatorId?: string) {
     setError(null);
 
     try {
-      const operatorNames: Record<string, string> = {};
-
-      const routesQuery = operatorId
-        ? query(collection(db, 'routes'), where('operatorId', '==', operatorId))
-        : query(collection(db, 'routes'), where('isActive', '==', true));
-
-      const routesSnap = await getDocs(routesQuery);
+      const routes = operatorId
+        ? await getRoutesByOperator(operatorId)
+        : await getActiveRoutes();
 
       const operatorIds = new Set<string>();
       const allStops: StopCandidate[] = [];
 
-      routesSnap.docs.forEach(doc => {
-        const routeData = doc.data() as RouteData;
-        const routeId = doc.id;
-        const routeName = routeData.name || 'Unnamed Route';
-        const opId = routeData.operatorId || operatorId || '';
+      routes.forEach((route) => {
+        const routeName = route.name || 'Unnamed Route';
+        const opId = route.operatorId || operatorId || '';
 
         if (opId) operatorIds.add(opId);
-        if (!routeData.stops || !Array.isArray(routeData.stops)) return;
+        if (!route.stops || !Array.isArray(route.stops)) return;
 
-        routeData.stops.forEach((stop: RouteStop) => {
+        route.stops.forEach((stop: RouteStop) => {
           allStops.push({
-            stopId: stop.id || `${routeId}-${stop.order || 0}`,
-            routeId,
+            stopId: stop.id || `${route.id}-0`,
+            routeId: route.id,
             routeName,
             operatorId: opId,
             operatorName: '',
@@ -95,14 +69,9 @@ export function useStopsForOperator(operatorId?: string) {
         });
       });
 
-      if (operatorIds.size > 0) {
-        const opSnapshot = await getDocs(collection(db, 'operators'));
-        opSnapshot.docs.forEach(d => {
-          const data = d.data() as OperatorData;
-          operatorNames[d.id] = data.name || d.id;
-        });
-      }
-
+      const operatorNames = operatorIds.size > 0
+        ? await fetchOperatorNames()
+        : {};
       setOperatorMap(operatorNames);
 
       const enriched = allStops.map(s => ({

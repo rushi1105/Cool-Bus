@@ -1,134 +1,218 @@
-/**
- * FeeManagement Screen — All students with PAID/UNPAID/TRIAL badges
- */
-
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar } from 'react-native';
-import Colors from '../../constants/colors';
-import { mockStudents, mockFees } from '../../services/firebase';
+import {
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { useFees } from '../../hooks/useFees';
+import { useAuth } from '../../hooks/useAuth';
+import { useStudents } from '../../hooks/useStudents';
+import { createFeeDoc, payFee } from '../../repositories/feeRepository';
+import type { Fee, Student } from '../../repositories/types';
 
-interface FeeManagementProps { navigation: any }
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
-export const FeeManagement: React.FC<FeeManagementProps> = ({ navigation }) => {
-  const [filter, setFilter] = useState<'ALL' | 'PAID' | 'UNPAID' | 'TRIAL'>('ALL');
+export default function FeeManagement() {
+  const { profile } = useAuth();
+  const operatorId = profile?.operatorId ?? null;
+  const { fees, loading, refresh } = useFees(operatorId, true);
+  const { students } = useStudents(operatorId);
+  const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [total, setTotal] = useState('');
+  const [month, setMonth] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
-  const students = mockStudents.filter((s) => s.operatorId === 'op-1');
-  const studentFees = students.map((s) => {
-    const fee = mockFees.find((f) => f.studentId === s.id && f.month === '2026-06');
-    return { ...s, fee };
-  });
+  const activeStudents = students.filter((s) => s.isActive !== false);
 
-  const filtered = filter === 'ALL' ? studentFees : studentFees.filter((sf) => sf.fee?.status === filter);
-
-  const getStatusConfig = (status?: string) => {
-    switch (status) {
-      case 'PAID': return { bg: Colors.successFaded, color: Colors.success, label: 'PAID' };
-      case 'UNPAID': return { bg: Colors.errorFaded, color: Colors.error, label: 'UNPAID' };
-      case 'TRIAL': return { bg: Colors.warningFaded, color: Colors.warning, label: 'TRIAL' };
-      default: return { bg: Colors.background, color: Colors.textTertiary, label: 'N/A' };
+  const handleCreateFee = async () => {
+    if (!operatorId || !selectedStudent || !total) return;
+    setSubmitting(true);
+    try {
+      const parsedTotal = parseFloat(total);
+      if (isNaN(parsedTotal) || parsedTotal <= 0) {
+        Alert.alert('Invalid amount');
+        setSubmitting(false);
+        return;
+      }
+      const student = students.find((s) => s.id === selectedStudent);
+      await createFeeDoc({
+        studentId: selectedStudent,
+        operatorId,
+        total: parsedTotal,
+        month: month || new Date().toLocaleString('default', { month: 'long' }),
+        status: 'UNPAID',
+        parentId: student?.parentId ?? '',
+        trialUsed: false,
+      });
+      Alert.alert('Fee created');
+      setSelectedStudent(null);
+      setTotal('');
+      setMonth('');
+      refresh();
+    } catch {
+      Alert.alert('Failed to create fee');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  const filters = [
-    { key: 'ALL', label: 'All', count: studentFees.length },
-    { key: 'PAID', label: 'Paid', count: studentFees.filter((sf) => sf.fee?.status === 'PAID').length },
-    { key: 'UNPAID', label: 'Unpaid', count: studentFees.filter((sf) => sf.fee?.status === 'UNPAID').length },
-    { key: 'TRIAL', label: 'Trial', count: studentFees.filter((sf) => sf.fee?.status === 'TRIAL').length },
-  ];
+  const handleMarkPaid = async (fee: Fee) => {
+    try {
+      await payFee(fee.id);
+      refresh();
+    } catch {
+      Alert.alert('Failed to update fee');
+    }
+  };
+
+  const renderFeeItem = ({ item }: { item: Fee }) => {
+    const student = students.find((s) => s.id === item.studentId);
+    return (
+      <View style={[styles.feeItem, item.status === 'PAID' && styles.paidItem]}>
+        <Text style={styles.studentName}>{student?.name ?? 'Unknown'}</Text>
+        <Text style={styles.feeAmount}>${item.total.toFixed(2)}</Text>
+        <Text style={styles.feeStatus}>{item.status}</Text>
+        {item.status === 'UNPAID' && (
+          <TouchableOpacity
+            style={styles.payButton}
+            onPress={() => handleMarkPaid(item)}
+          >
+            <Text style={styles.payButtonText}>Mark Paid</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Fee Management</Text>
+      <Text style={styles.heading}>Fee Management</Text>
 
-        {/* Filter Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-          {filters.map((f) => (
-            <TouchableOpacity
-              key={f.key}
-              style={[styles.filterTab, filter === f.key && styles.filterTabActive]}
-              onPress={() => setFilter(f.key as any)}
-            >
-              <Text style={[styles.filterTabText, filter === f.key && styles.filterTabTextActive]}>
-                {f.label}
-              </Text>
-              <View style={[styles.filterCount, filter === f.key && styles.filterCountActive]}>
-                <Text style={[styles.filterCountText, filter === f.key && styles.filterCountTextActive]}>{f.count}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-        {/* Student List */}
-        {filtered.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>📭</Text>
-            <Text style={styles.emptyText}>No students in this category</Text>
-          </View>
+      <View style={styles.form}>
+        <Text style={styles.sectionTitle}>Create Fee</Text>
+        {activeStudents.length === 0 ? (
+          <Text style={{ color: '#666', fontStyle: 'italic', marginBottom: 12 }}>
+            No active students to invoice.
+          </Text>
         ) : (
-          filtered.map((sf) => {
-            const sc = getStatusConfig(sf.fee?.status);
-            return (
-              <View key={sf.id} style={styles.studentCard}>
-                <View style={styles.studentLeft}>
-                  <View style={styles.studentAvatar}>
-                    <Text style={styles.studentAvatarText}>{sf.gender === 'Male' ? '👦' : '👧'}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.studentName}>{sf.name}</Text>
-                    <Text style={styles.studentGrade}>Grade {sf.grade} • {sf.stopLocation?.label || 'No stop'}</Text>
-                  </View>
-                </View>
-                <View style={styles.studentRight}>
-                  <View style={[styles.statusBadge, { backgroundColor: sc.bg }]}>
-                    <Text style={[styles.statusBadgeText, { color: sc.color }]}>{sc.label}</Text>
-                  </View>
-                  {sf.fee && (
-                    <Text style={styles.feeAmount}>₹{sf.fee.total.toLocaleString()}</Text>
-                  )}
-                </View>
-              </View>
-            );
-          })
+          <FlatList
+            data={activeStudents}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            renderItem={({ item }: { item: Student }) => (
+              <TouchableOpacity
+                style={[
+                  styles.studentPill,
+                  selectedStudent === item.id && styles.selectedPill,
+                ]}
+                onPress={() => setSelectedStudent(item.id)}
+              >
+                <Text style={selectedStudent === item.id ? { color: '#fff' } : undefined}>{item.name}</Text>
+              </TouchableOpacity>
+            )}
+            keyExtractor={(item) => item.id}
+          />
         )}
-      </ScrollView>
+        <TextInput
+          style={styles.input}
+          placeholder="Amount"
+          value={total}
+          onChangeText={setTotal}
+          keyboardType="decimal-pad"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Month (e.g. June)"
+          value={month}
+          onChangeText={setMonth}
+        />
+        <TouchableOpacity
+          style={styles.submitButton}
+          onPress={handleCreateFee}
+          disabled={!selectedStudent || !total || submitting}
+        >
+          <Text style={styles.submitText}>
+            {submitting ? 'Creating...' : 'Create Fee'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.sectionTitle}>
+        All Fees ({fees.length})
+      </Text>
+      <FlatList
+        data={fees}
+        renderItem={renderFeeItem}
+        keyExtractor={(item) => item.id}
+      />
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  content: { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 100 },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.dark, marginBottom: 20 },
-  filterScroll: { marginBottom: 20, flexGrow: 0 },
-  filterTab: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10,
-    borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, marginRight: 8,
+  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  heading: { fontSize: 24, fontWeight: 'bold', marginBottom: 16 },
+  sectionTitle: { fontSize: 18, fontWeight: '600', marginVertical: 12 },
+  form: { marginBottom: 16, padding: 12, backgroundColor: '#f5f5f5', borderRadius: 8 },
+  studentPill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#e0e0e0',
+    marginRight: 8,
+    marginBottom: 8,
   },
-  filterTabActive: { backgroundColor: Colors.primaryFaded, borderColor: Colors.primary },
-  filterTabText: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary },
-  filterTabTextActive: { color: Colors.primary },
-  filterCount: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2 },
-  filterCountActive: { backgroundColor: Colors.primary },
-  filterCountText: { fontSize: 11, fontWeight: '700', color: Colors.textTertiary },
-  filterCountTextActive: { color: Colors.white },
-  studentCard: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 10, elevation: 1,
+  selectedPill: { backgroundColor: '#4a90d9' },
+  input: {
+    borderWidth: 1,
+    borderColor: '#ccc',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 6,
+    fontSize: 16,
   },
-  studentLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 },
-  studentAvatar: { width: 44, height: 44, borderRadius: 14, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center' },
-  studentAvatarText: { fontSize: 20 },
-  studentName: { fontSize: 15, fontWeight: '700', color: Colors.dark },
-  studentGrade: { fontSize: 12, color: Colors.textTertiary, marginTop: 2 },
-  studentRight: { alignItems: 'flex-end', gap: 4 },
-  statusBadge: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
-  statusBadgeText: { fontSize: 11, fontWeight: '800' },
-  feeAmount: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary },
-  emptyState: { alignItems: 'center', paddingVertical: 40, backgroundColor: Colors.white, borderRadius: 18 },
-  emptyIcon: { fontSize: 40, marginBottom: 12 },
-  emptyText: { fontSize: 14, color: Colors.textTertiary, fontWeight: '500' },
+  submitButton: {
+    backgroundColor: '#4a90d9',
+    padding: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  submitText: { color: '#fff', fontWeight: '600' },
+  feeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderColor: '#eee',
+  },
+  paidItem: { opacity: 0.6 },
+  studentName: { flex: 1, fontSize: 16 },
+  feeAmount: { fontSize: 16, fontWeight: '600', marginRight: 12 },
+  feeStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+    marginRight: 8,
+    textTransform: 'uppercase',
+  },
+  payButton: { backgroundColor: '#4CAF50', padding: 8, borderRadius: 6 },
+  payButtonText: { color: '#fff', fontSize: 12, fontWeight: '600' },
 });
-
-export default FeeManagement;

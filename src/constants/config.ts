@@ -29,7 +29,7 @@ export const Config = {
   },
 
   coupon: {
-    format: /^[A-Z]+-FREE-\d{4}$/,
+    format: /^[A-Z]+-[A-Z0-9]{6}$/,
     freeMonths: 1,
   },
 

@@ -19,8 +19,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../../services/firebase';
+import { checkPhoneExists } from '../../repositories/authRepository';
 
 interface LoginScreenProps {
   navigation: any;
@@ -43,15 +42,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
     setIsLoading(true);
 
     try {
-      // Issue 1 Fix: Verify account exists before sending OTP
-      const normalizedPhone = `+91${trimmedPhone}`;
-      const q = query(
-        collection(db, 'users'),
-        where('phone', '==', normalizedPhone)
-      );
-      const snap = await getDocs(q);
+      const exists = await checkPhoneExists(trimmedPhone);
 
-      if (snap.empty) {
+      if (!exists) {
         setIsLoading(false);
         setError('No account found. Please register first.');
         return;

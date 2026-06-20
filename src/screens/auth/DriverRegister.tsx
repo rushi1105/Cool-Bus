@@ -19,8 +19,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Colors from '../../constants/colors';
-import { db, fetchOperators, type Operator } from '../../services/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { checkPhoneExists } from '../../repositories/authRepository';
+import { fetchOperators } from '../../repositories/operatorRepository';
+import type { Operator } from '../../repositories/types';
 import Config from '../../constants/config';
 
 interface DriverRegisterProps {
@@ -35,6 +36,8 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
   const [phoneError, setPhoneError] = useState('');
   const checkedPhoneRef = useRef('');
 
+  const [pendingInvite, setPendingInvite] = useState<{ id: string; operatorId: string; operatorName: string } | null>(null);
+
   const checkPhoneNumber = async (phoneNumber: string) => {
     if (phoneNumber.length !== 10) return;
     if (phoneNumber === checkedPhoneRef.current) return;
@@ -42,18 +45,20 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
     checkedPhoneRef.current = phoneNumber;
     setIsCheckingPhone(true);
     setPhoneError('');
+    setPendingInvite(null);
 
     try {
-      const normalizedPhone = `+91${phoneNumber}`;
-      const q = query(
-        collection(db, 'users'),
-        where('phone', '==', normalizedPhone)
-      );
-      const snap = await getDocs(q);
-      if (!snap.empty) {
+      const exists = await checkPhoneExists(phoneNumber);
+      if (exists) {
         setPhoneError('This phone number is already registered.\n\nUse Log In to access your account,\nor enter a different phone number.');
       } else {
         setPhoneError('');
+        const { getPendingInviteByPhone } = require('../../repositories/userRepository');
+        const invite = await getPendingInviteByPhone('+91' + phoneNumber);
+        if (invite) {
+          setPendingInvite(invite);
+          setSelectedOperator(invite.operatorId);
+        }
       }
     } catch (err) {
       console.error('[Register] Phone verification failed:', err);
@@ -135,6 +140,7 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
         phone: '+91' + phone,
         operatorId: selectedOperator,
         shift: selectedShift,
+        inviteId: pendingInvite?.id,
       },
     });
   };
@@ -216,49 +222,59 @@ export const DriverRegister: React.FC<DriverRegisterProps> = ({ navigation }) =>
             {/* Operator */}
             <View style={styles.field}>
               <Text style={styles.label}>Operator / Agency</Text>
-              <TouchableOpacity
-                style={[styles.input, styles.picker]}
-                onPress={() => setShowOperatorPicker(!showOperatorPicker)}
-              >
-                <Text
-                  style={[
-                    styles.pickerText,
-                    !operator && styles.pickerPlaceholder,
-                  ]}
-                >
-                  {operator?.name ?? 'Select your operator'}
-                </Text>
-                <Text style={styles.pickerArrow}>
-                  {showOperatorPicker ? '▲' : '▼'}
-                </Text>
-              </TouchableOpacity>
-
-              {showOperatorPicker && (
-                <View style={styles.pickerDropdown}>
-                  {operators.map((op) => (
-                    <TouchableOpacity
-                      key={op.id}
-                      style={[
-                        styles.pickerOption,
-                        selectedOperator === op.id && styles.pickerOptionActive,
-                      ]}
-                      onPress={() => {
-                        setSelectedOperator(op.id);
-                        setShowOperatorPicker(false);
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.pickerOptionText,
-                          selectedOperator === op.id && styles.pickerOptionTextActive,
-                        ]}
-                      >
-                        {op.name}
-                      </Text>
-                      <Text style={styles.pickerOptionCode}>{op.code}</Text>
-                    </TouchableOpacity>
-                  ))}
+              {pendingInvite ? (
+                <View style={[styles.input, styles.picker, { backgroundColor: Colors.primaryFaded }]}>
+                  <Text style={[styles.pickerText, { color: Colors.primary, fontWeight: '700' }]}>
+                    {pendingInvite.operatorName} (Invited)
+                  </Text>
                 </View>
+              ) : (
+                <>
+                  <TouchableOpacity
+                    style={[styles.input, styles.picker]}
+                    onPress={() => setShowOperatorPicker(!showOperatorPicker)}
+                  >
+                    <Text
+                      style={[
+                        styles.pickerText,
+                        !operator && styles.pickerPlaceholder,
+                      ]}
+                    >
+                      {operator?.name ?? 'Select your operator'}
+                    </Text>
+                    <Text style={styles.pickerArrow}>
+                      {showOperatorPicker ? '▲' : '▼'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {showOperatorPicker && (
+                    <View style={styles.pickerDropdown}>
+                      {operators.map((op) => (
+                        <TouchableOpacity
+                          key={op.id}
+                          style={[
+                            styles.pickerOption,
+                            selectedOperator === op.id && styles.pickerOptionActive,
+                          ]}
+                          onPress={() => {
+                            setSelectedOperator(op.id);
+                            setShowOperatorPicker(false);
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.pickerOptionText,
+                              selectedOperator === op.id && styles.pickerOptionTextActive,
+                            ]}
+                          >
+                            {op.name}
+                          </Text>
+                          <Text style={styles.pickerOptionCode}>{op.code}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </>
               )}
             </View>
 

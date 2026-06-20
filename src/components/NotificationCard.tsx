@@ -7,7 +7,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Colors from '../constants/colors';
-import type { AppNotification } from '../services/notifications';
+import type { AppNotification } from '../repositories/types';
 
 interface NotificationCardProps {
   notification: AppNotification;
@@ -18,12 +18,13 @@ export const NotificationCard: React.FC<NotificationCardProps> = ({
   notification,
   onPress,
 }) => {
-  const typeConfig = {
+  const typeConfigs: Record<string, { icon: string; color: string; bg: string }> = {
     info: { icon: 'ℹ️', color: Colors.primary, bg: Colors.primaryFaded },
     warning: { icon: '⚠️', color: Colors.warning, bg: Colors.warningFaded },
     success: { icon: '✅', color: Colors.success, bg: Colors.successFaded },
     sos: { icon: '🚨', color: Colors.error, bg: Colors.errorFaded },
-  }[notification.type];
+  };
+  const typeConfig = typeConfigs[notification.type] ?? typeConfigs.info;
 
   const timeAgo = getTimeAgo(notification.timestamp);
 

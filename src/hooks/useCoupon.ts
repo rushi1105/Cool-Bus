@@ -6,7 +6,7 @@
 
 import { useState, useCallback } from 'react';
 import couponService, { CouponValidation } from '../services/coupons';
-import { Coupon } from '../services/firebase';
+import type { Coupon } from '../repositories/types';
 
 interface UseCouponReturn {
   code: string;
@@ -73,7 +73,9 @@ export function useCoupon(): UseCouponReturn {
     async (operatorId: string, operatorName: string): Promise<Coupon | null> => {
       try {
         const coupon = await couponService.generate(operatorId, operatorName);
-        setCoupons((prev) => [coupon, ...prev]);
+        if (coupon) {
+          setCoupons((prev) => [coupon, ...prev]);
+        }
         return coupon;
       } catch {
         return null;

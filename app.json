@@ -46,6 +46,12 @@
           "locationWhenInUsePermission": "Allow BusTrack to use your location to track bus position."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "668af9e2-28d5-42c8-8113-4ed5e3bc281b"
+      }
+    },
+    "owner": "rushi_1105"
   }
 }

@@ -7,8 +7,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Animated } from 'react-native';
-import { doc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
-import { db, type Bus } from '../services/firebase';
+import { onBusSnapshot } from '../repositories/fleetRepository';
+import type { Bus } from '../repositories/types';
 import { calculateETA } from '../services/location';
 
 interface UseBusLocationReturn {
@@ -62,35 +62,31 @@ export function useBusLocation(
     setLoading(true);
     setError(null);
 
-    const unsubscribe: Unsubscribe = onSnapshot(
-      doc(db, 'buses', busId),
-      (snapshot) => {
-        if (!snapshot.exists()) {
+    const unsubscribe = onBusSnapshot(
+      busId,
+      (data) => {
+        if (!data) {
           setBus(null);
           setIsActive(false);
           setLoading(false);
           return;
         }
 
-        const data = { id: snapshot.id, ...snapshot.data() } as Bus;
         setBus(data);
         setIsActive(data.isActive);
-        setSpeed(data.speed);
+        setSpeed(data.speed ?? 0);
 
-        const lat = data.currentLocation.latitude;
-        const lng = data.currentLocation.longitude;
+        const lat = data.currentLocation?.latitude ?? 0;
+        const lng = data.currentLocation?.longitude ?? 0;
 
-        // Cancel any in-flight animation
         animRef.current?.stop();
 
         if (isFirstUpdate.current) {
-          // First update — jump to position
           latAnim.setValue(lat);
           lngAnim.setValue(lng);
           setCoordinate({ latitude: lat, longitude: lng });
           isFirstUpdate.current = false;
         } else {
-          // Subsequent updates — animate smoothly via RN Animated
           animRef.current = Animated.parallel([
             Animated.timing(latAnim, {
               toValue: lat,
@@ -106,7 +102,6 @@ export function useBusLocation(
           animRef.current.start();
         }
 
-        // Calculate ETA if stop location provided
         if (stopLocation && data.isActive) {
           const etaMin = calculateETA(
             lat,

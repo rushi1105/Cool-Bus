@@ -49,7 +49,7 @@ export const NotificationsScreen: React.FC<NotificationsScreenProps> = ({ naviga
   };
 
   const getNotificationStyle = (type: Notification['type'], isRead: boolean) => {
-    const config = {
+    const base = {
       info: {
         bg: Colors.primaryFaded,
         border: Colors.primary,
@@ -65,16 +65,18 @@ export const NotificationsScreen: React.FC<NotificationsScreenProps> = ({ naviga
         border: Colors.success,
         icon: '✅',
       },
+      sos: {
+        bg: Colors.errorFaded,
+        border: Colors.error,
+        icon: '🚨',
+      },
     }[type] || {
       bg: Colors.background,
       border: Colors.border,
       icon: '🔔',
-    };
-
-    return {
-      ...config,
       opacity: isRead ? 0.6 : 1,
     };
+    return { ...base, opacity: isRead ? 0.6 : 1 };
   };
 
   const handleMarkRead = (item: Notification) => {

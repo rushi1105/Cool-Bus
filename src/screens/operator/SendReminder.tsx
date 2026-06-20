@@ -1,25 +1,37 @@
-/**
- * SendReminder Screen
- */
-
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, StatusBar, Alert } from 'react-native';
-import Colors from '../../constants/colors';
-import { mockStudents, mockFees } from '../../services/firebase';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { useAuth } from '../../hooks/useAuth';
+import { useStudents } from '../../hooks/useStudents';
+import { useFees } from '../../hooks/useFees';
+import { NotificationService } from '../../services/notifications/NotificationService';
+import type { Fee, Student } from '../../repositories/types';
 
 interface SendReminderProps { navigation: any }
 
-export const SendReminder: React.FC<SendReminderProps> = ({ navigation }) => {
+export default function SendReminder({ navigation }: SendReminderProps) {
+  const { profile } = useAuth();
+  const operatorId = profile?.operatorId ?? null;
+  const operatorName = profile?.name ?? '';
+  const { students, loading: studentsLoading } = useStudents(operatorId);
+  const { fees, loading: feesLoading } = useFees(operatorId);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [isSending, setIsSending] = useState(false);
+  const [sending, setSending] = useState(false);
 
-  const unpaidStudents = mockStudents
-    .filter((s) => s.operatorId === 'op-1')
-    .map((s) => {
-      const fee = mockFees.find((f) => f.studentId === s.id && f.status === 'UNPAID');
-      return { ...s, fee };
+  const unpaidFees = fees.filter((f) => f.status === 'UNPAID');
+  const unpaidStudents: (Student & { fee: Fee })[] = unpaidFees
+    .map((fee) => {
+      const student = students.find((s) => s.id === fee.studentId);
+      return student ? { ...student, fee } : null;
     })
-    .filter((s) => s.fee);
+    .filter((s): s is Student & { fee: Fee } => s !== null);
 
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) =>
@@ -35,24 +47,51 @@ export const SendReminder: React.FC<SendReminderProps> = ({ navigation }) => {
     }
   };
 
-  const handleSend = () => {
-    Alert.alert(
-      'Reminders Sent',
-      `Fee reminders sent to ${selectedIds.length} parent(s) via SMS & Push notification.`,
-      [{ text: 'Done', onPress: () => navigation.goBack() }],
-    );
+  const handleSend = async () => {
+    setSending(true);
+    try {
+      const selected = unpaidStudents.filter((s) => selectedIds.includes(s.id));
+      const results = await Promise.all(
+        selected.map((s) =>
+          NotificationService.sendFeeReminder({
+            parentId: s.parentId,
+            parentName: operatorName,
+            operatorId: operatorId ?? '',
+            studentName: s.name,
+            amount: s.fee.total,
+            month: s.fee.month,
+          }),
+        ),
+      );
+      const sent = results.filter((id) => id !== null).length;
+      Alert.alert(
+        'Reminders Sent',
+        `Fee reminders sent to ${sent} parent(s).`,
+        [{ text: 'Done', onPress: () => navigation.goBack() }],
+      );
+    } catch {
+      Alert.alert('Error', 'Failed to send reminders.');
+    } finally {
+      setSending(false);
+    }
   };
+
+  if (studentsLoading || feesLoading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={Colors.background} />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Send Reminder</Text>
         <Text style={styles.subtitle}>
           Select parents with unpaid fees to send a payment reminder
         </Text>
 
-        {/* Select All */}
         <TouchableOpacity style={styles.selectAll} onPress={selectAll}>
           <View style={[styles.checkbox, selectedIds.length === unpaidStudents.length && styles.checkboxChecked]}>
             {selectedIds.length === unpaidStudents.length && <Text style={styles.checkMark}>✓</Text>}
@@ -62,10 +101,8 @@ export const SendReminder: React.FC<SendReminderProps> = ({ navigation }) => {
           </Text>
         </TouchableOpacity>
 
-        {/* List */}
         {unpaidStudents.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyIcon}>🎉</Text>
             <Text style={styles.emptyText}>All fees are paid!</Text>
             <Text style={styles.emptySubtext}>No unpaid students to remind</Text>
           </View>
@@ -85,66 +122,63 @@ export const SendReminder: React.FC<SendReminderProps> = ({ navigation }) => {
                 <Text style={styles.studentParent}>Parent ID: {s.parentId}</Text>
               </View>
               <View style={styles.studentRight}>
-                <Text style={styles.feeAmount}>₹{s.fee?.total.toLocaleString()}</Text>
-                <Text style={styles.feeMonth}>{s.fee?.month}</Text>
+                <Text style={styles.feeAmount}>${s.fee.total.toFixed(2)}</Text>
               </View>
             </TouchableOpacity>
           ))
         )}
 
-        {/* Send Button */}
         {selectedIds.length > 0 && (
           <TouchableOpacity
-            style={styles.sendButton}
+            style={[styles.sendButton, sending && styles.disabledButton]}
             onPress={handleSend}
+            disabled={sending}
             activeOpacity={0.85}
           >
             <Text style={styles.sendButtonText}>
-              📢 Send Reminder to {selectedIds.length} Parent{selectedIds.length > 1 ? 's' : ''}
+              {sending ? 'Sending...' : `Send Reminder to ${selectedIds.length} Parent${selectedIds.length > 1 ? 's' : ''}`}
             </Text>
           </TouchableOpacity>
         )}
       </ScrollView>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   content: { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 100 },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.dark, marginBottom: 4 },
-  subtitle: { fontSize: 14, color: Colors.textSecondary, marginBottom: 24, lineHeight: 20 },
+  title: { fontSize: 28, fontWeight: '800', color: '#1a1a2e', marginBottom: 4 },
+  subtitle: { fontSize: 14, color: '#666', marginBottom: 24, lineHeight: 20 },
   selectAll: {
     flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16,
-    backgroundColor: Colors.white, borderRadius: 14, padding: 14,
+    backgroundColor: '#fff', borderRadius: 14, padding: 14,
   },
-  selectAllText: { fontSize: 15, fontWeight: '600', color: Colors.dark },
+  selectAllText: { fontSize: 15, fontWeight: '600', color: '#1a1a2e' },
   checkbox: {
-    width: 24, height: 24, borderRadius: 8, borderWidth: 2, borderColor: Colors.border,
+    width: 24, height: 24, borderRadius: 8, borderWidth: 2, borderColor: '#ddd',
     justifyContent: 'center', alignItems: 'center',
   },
-  checkboxChecked: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  checkMark: { color: Colors.white, fontSize: 14, fontWeight: '800' },
+  checkboxChecked: { backgroundColor: '#4a90d9', borderColor: '#4a90d9' },
+  checkMark: { color: '#fff', fontSize: 14, fontWeight: '800' },
   studentCard: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: 14,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14,
     padding: 16, marginBottom: 8, elevation: 1, gap: 12,
   },
-  studentCardSelected: { backgroundColor: Colors.primaryFaded, borderWidth: 1, borderColor: Colors.primary },
+  studentCardSelected: { backgroundColor: '#e8f0fe', borderWidth: 1, borderColor: '#4a90d9' },
   studentContent: { flex: 1 },
-  studentName: { fontSize: 15, fontWeight: '700', color: Colors.dark },
-  studentParent: { fontSize: 12, color: Colors.textTertiary, marginTop: 2 },
+  studentName: { fontSize: 15, fontWeight: '700', color: '#1a1a2e' },
+  studentParent: { fontSize: 12, color: '#999', marginTop: 2 },
   studentRight: { alignItems: 'flex-end' },
-  feeAmount: { fontSize: 15, fontWeight: '700', color: Colors.error },
-  feeMonth: { fontSize: 11, color: Colors.textTertiary, marginTop: 2 },
+  feeAmount: { fontSize: 15, fontWeight: '700', color: '#e53935' },
   sendButton: {
-    marginTop: 24, height: 56, backgroundColor: Colors.warning, borderRadius: 16,
+    marginTop: 24, height: 56, backgroundColor: '#ff9800', borderRadius: 16,
     justifyContent: 'center', alignItems: 'center', elevation: 4,
   },
-  sendButtonText: { color: Colors.white, fontSize: 16, fontWeight: '700' },
-  emptyState: { alignItems: 'center', paddingVertical: 40, backgroundColor: Colors.white, borderRadius: 18 },
-  emptyIcon: { fontSize: 40, marginBottom: 12 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: Colors.textPrimary },
-  emptySubtext: { fontSize: 13, color: Colors.textTertiary, marginTop: 4 },
+  disabledButton: { opacity: 0.6 },
+  sendButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  emptyState: { alignItems: 'center', paddingVertical: 40, backgroundColor: '#fff', borderRadius: 18 },
+  emptyText: { fontSize: 16, fontWeight: '600', color: '#333' },
+  emptySubtext: { fontSize: 13, color: '#999', marginTop: 4 },
 });
-
-export default SendReminder;

@@ -19,9 +19,15 @@ import {
   Alert,
 } from 'react-native';
 import MapView, { Marker, AnimatedRegion, PROVIDER_GOOGLE } from 'react-native-maps';
-import { collection, query, where, getDocs, doc, getDoc, onSnapshot } from 'firebase/firestore';
-import { db, auth } from '../../services/firebase';
+import { auth } from '../../services/firebase';
 import { signOut } from 'firebase/auth';
+import { onStudentsSnapshot } from '../../repositories/studentRepository';
+import { getRoute } from '../../repositories/routeRepository';
+import { onParentFeesSnapshot } from '../../repositories/feeRepository';
+import { onAssignmentsSnapshot } from '../../repositories/assignmentRepository';
+import { getUserByUid, getUserProfile } from '../../repositories/authRepository';
+import { onBusSnapshot, fetchBusesByRoute } from '../../repositories/fleetRepository';
+import { onActiveTripByAssignmentSnapshot } from '../../repositories/tripRepository';
 import { useAuth } from '../../hooks/useAuth';
 import { calculateETA, getDistance } from '../../services/location';
 import Colors from '../../constants/colors';
@@ -74,15 +80,10 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     }, 3000);
 
     // 1. Listen to /students in real time
-    const studentQ = query(
-      collection(db, 'students'),
-      where('parentId', '==', user.uid)
-    );
-
     let unsubscribeFees: (() => void) | null = null;
 
-    const unsubscribeStudents = onSnapshot(studentQ, (studentSnap) => {
-      if (studentSnap.empty) {
+    const unsubscribeStudents = onStudentsSnapshot(user.uid, (students) => {
+      if (students.length === 0) {
         studentFoundRef.current = false;
         setStudent(null);
         setFeeStatus(null);
@@ -93,15 +94,15 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
       }
 
       studentFoundRef.current = true;
-      const studentDoc = studentSnap.docs[0];
-      const studentData = { id: studentDoc.id, ...studentDoc.data() } as any;
+      const studentDoc = students[0];
+      const studentData = studentDoc as any;
       setStudent(studentData);
 
       // Fetch static route info
       if (studentData.routeId) {
-        getDoc(doc(db, 'routes', studentData.routeId)).then(routeSnap => {
-          if (routeSnap.exists()) {
-            const rData = routeSnap.data() as any;
+        getRoute(studentData.routeId).then(route => {
+          if (route) {
+            const rData = route as any;
             setRouteInfo(rData);
 
             // Find the student's stop
@@ -135,7 +136,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
               });
             }
           }
-        });
+        }).catch((err) => console.error('[ParentHome] getRoute error:', err));
       } else {
         // Fallback
         setInitialRegion({
@@ -147,19 +148,11 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
       }
 
       // 2. Query /fees where parentId == uid and studentId == student.id limit 1 in real time
-      const feeQ = query(
-        collection(db, 'fees'),
-        where('parentId', '==', user.uid),
-        where('studentId', '==', studentDoc.id)
-      );
-
       if (unsubscribeFees) unsubscribeFees();
 
-      unsubscribeFees = onSnapshot(feeQ, (feeSnap) => {
-        let fStatus = 'TRIAL';
-        if (!feeSnap.empty) {
-          fStatus = feeSnap.docs[0].data().status || 'UNPAID';
-        }
+      unsubscribeFees = onParentFeesSnapshot(user.uid, (fees) => {
+        const fee = fees.find(f => f.studentId === studentDoc.id);
+        const fStatus = fee?.status || 'TRIAL';
         setFeeStatus(fStatus);
         setIsLoading(false);
       }, (err) => {
@@ -188,83 +181,84 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     const today = new Date().toISOString().split('T')[0];
     let assignmentBusId: string | null = null;
     let assignmentDriverId: string | null = null;
+    let assignmentId: string | null = null;
 
-    const asgnQ = query(
-      collection(db, 'assignments'),
-      where('routeId', '==', student.routeId),
-      where('date', '==', today)
-    );
-
-    const unsubscribeAssignment = onSnapshot(asgnQ, (asgnSnap) => {
-      if (!asgnSnap.empty) {
-        const asgn = asgnSnap.docs[0].data() as any;
+    const unsubscribeAssignment = onAssignmentsSnapshot(student.routeId, today, (assignments) => {
+      if (assignments.length > 0) {
+        const asgn = assignments[0] as any;
+        assignmentId = asgn.id || null;
         assignmentBusId = asgn.busId || null;
         assignmentDriverId = asgn.driverId || null;
 
         // Resolve driver from assignment
         if (assignmentDriverId) {
-          getDoc(doc(db, 'users', assignmentDriverId)).then((snap) => {
-            if (snap.exists()) {
-              setDriver(snap.data());
-            } else {
-              setDriver(null);
-            }
+          getUserProfile(assignmentDriverId).then((userData) => {
+            setDriver(userData);
           }).catch(err => {
             console.error('[ParentHome] Fetch driver error:', err);
           });
         } else {
           setDriver(null);
         }
+
+        // Subscribe to active trip for this assignment
+        if (unsubscribeTrip) unsubscribeTrip();
+        if (assignmentId) {
+          unsubscribeTrip = onActiveTripByAssignmentSnapshot(assignmentId, (trip) => {
+            if (trip) {
+              setBusLocation((prev: any) => ({
+                ...prev,
+                tripRoutePoints: trip.routePoints,
+                tripStatus: trip.status,
+              }));
+            }
+          }, (err) => {
+            console.error('[ParentHome] Trip stream error:', err);
+          });
+        }
       } else {
         // Fallback: use bus with matching defaultRouteId
-        const busesQ = query(
-          collection(db, 'buses'),
-          where('defaultRouteId', '==', student.routeId)
-        );
-        getDocs(busesQ).then(busSnap => {
-          if (!busSnap.empty) {
-            const busData = busSnap.docs[0].data() as any;
-            assignmentBusId = busSnap.docs[0].id;
+        fetchBusesByRoute(student.routeId).then(buses => {
+          if (buses.length > 0) {
+            const busData = buses[0] as any;
+            assignmentBusId = busData.id;
             // Resolve driver from bus.driverId as fallback
             if (busData.driverId) {
-              getDoc(doc(db, 'users', busData.driverId)).then((dSnap) => {
-                setDriver(dSnap.exists() ? dSnap.data() : null);
-              });
+              getUserByUid(busData.driverId).then((dSnap) => {
+                setDriver(dSnap ?? null);
+              }).catch(() => {});
             }
           }
-        });
+        }).catch(() => {});
       }
     }, (err) => {
       console.error('[ParentHome] Assignment stream error:', err);
       // Fallback to bus query
-      const busesQ = query(
-        collection(db, 'buses'),
-        where('defaultRouteId', '==', student.routeId)
-      );
-      getDocs(busesQ).then(busSnap => {
-        if (!busSnap.empty) {
-          const busData = busSnap.docs[0].data() as any;
-          assignmentBusId = busSnap.docs[0].id;
+      fetchBusesByRoute(student.routeId).then(buses => {
+        if (buses.length > 0) {
+          const busData = buses[0] as any;
+          assignmentBusId = busData.id;
         }
-      });
+      }).catch(() => {});
     });
 
     // Subscribe to bus location once we have the busId
     let unsubscribeBus: (() => void) | null = null;
+    let unsubscribeTrip: (() => void) | null = null;
 
     const waitForBusId = setInterval(() => {
       if (assignmentBusId) {
         clearInterval(waitForBusId);
 
-        unsubscribeBus = onSnapshot(doc(db, 'buses', assignmentBusId), (busDoc) => {
-          if (!busDoc.exists()) {
+        unsubscribeBus = onBusSnapshot(assignmentBusId, (bus) => {
+          if (!bus) {
             setBusLocation(null);
             setIsActive(false);
             setEtaMinutes(null);
             return;
           }
 
-          const busData = busDoc.data() as any;
+          const busData = bus as any;
           const lat = busData.currentLocation?.latitude;
           const lng = busData.currentLocation?.longitude;
 
@@ -304,6 +298,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
     return () => {
       unsubscribeAssignment();
       if (unsubscribeBus) unsubscribeBus();
+      if (unsubscribeTrip) unsubscribeTrip();
       clearInterval(waitForBusId);
     };
   }, [student?.routeId, feeStatus, student?.stopLocation]);
@@ -613,6 +608,14 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
               <Text style={styles.callButtonText}>📞 Call Driver</Text>
             </TouchableOpacity>
           )}
+
+          <TouchableOpacity
+            style={styles.requestStopButton}
+            onPress={() => navigation.navigate('RequestStopChange')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.requestStopButtonText}>Request Stop Change</Text>
+          </TouchableOpacity>
 
           {/* Next stop name from route stops array */}
           {routeInfo?.stops && isActive && (
@@ -928,6 +931,18 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  requestStopButton: {
+    marginTop: 10,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  requestStopButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
   },
 });
 

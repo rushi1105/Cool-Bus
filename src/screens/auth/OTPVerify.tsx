@@ -18,12 +18,13 @@ import {
   Alert,
 } from 'react-native';
 import Colors from '../../constants/colors';
+import { auth } from '../../services/firebase';
 import {
-  auth,
   getUserByUid,
   registerDriver,
   registerParent,
-} from '../../services/firebase';
+  registerOperator,
+} from '../../repositories/authRepository';
 import {
   signInWithCredential,
   PhoneAuthProvider,
@@ -210,6 +211,29 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
         // Treat as a valid login, let AppNavigator route automatically
         return;
       } else if (mode === 'login') {
+        // Try to find if they are a seeded operator without a user doc
+        const fullPhone = `+91${phone}`;
+        const { getOperatorByPhone } = require('../../repositories/operatorRepository');
+        const { linkExistingOperator } = require('../../repositories/authRepository');
+        const opByPhone = await getOperatorByPhone(fullPhone);
+        if (opByPhone) {
+           if (__DEV__) {
+             // In development, automatically create the missing user document
+             await linkExistingOperator(uid, opByPhone.id, {
+                 companyName: opByPhone.name,
+                 operatorCode: opByPhone.code,
+                 phone: fullPhone
+             });
+             return;
+           } else {
+             // In production, reject login for inconsistency
+             await signOut(auth);
+             Alert.alert('Inconsistent Account', 'Operator profile found but no auth user linked. Please contact support.');
+             navigation.reset({ index: 0, routes: [{ name: 'Welcome' }] });
+             return;
+           }
+        }
+
         // User does not exist, and we are in login mode
         await signOut(auth);
         Alert.alert('No Account Found', 'No account found. Please register first.');
@@ -226,6 +250,10 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               operatorId: registrationData.operatorId,
               shift: registrationData.shift,
             });
+            if (registrationData.inviteId) {
+              const { acceptInvite } = require('../../repositories/userRepository');
+              await acceptInvite(registrationData.inviteId);
+            }
           } else if (role === 'parent') {
             await registerParent(uid, {
               parentName: registrationData.parentName,
@@ -238,6 +266,12 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
               operatorId: registrationData.operatorId,
               routeId: registrationData.routeId,
               stopId: registrationData.stopId,
+            });
+          } else if (role === 'operator') {
+            await registerOperator(uid, {
+              companyName: registrationData.companyName,
+              operatorCode: registrationData.operatorCode,
+              phone: registrationData.phone,
             });
           }
           // Do NOT manually navigate. Let AppNavigator handle it.
