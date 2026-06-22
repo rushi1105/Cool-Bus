@@ -26,6 +26,7 @@ import {
 } from '../../repositories/assignmentRepository';
 import { getActiveTripForBus } from '../../repositories/tripRepository';
 import type { Assignment } from '../../repositories/types';
+import { localTodayString, localFormatDate } from '../../utils/date';
 
 interface AssignmentSchedulerProps {
   navigation: any;
@@ -37,12 +38,12 @@ const SHIFTS: Array<{ label: string; value: 'Morning' | 'Evening' | 'Both' }> = 
   { label: 'Both', value: 'Both' },
 ];
 
-function formatDate(d: Date): string {
-  return d.toISOString().split('T')[0];
+function todayString(): string {
+  return localTodayString();
 }
 
-function todayString(): string {
-  return formatDate(new Date());
+function formatDate(d: Date): string {
+  return localFormatDate(d);
 }
 
 export const AssignmentScheduler: React.FC<AssignmentSchedulerProps> = ({ navigation }) => {

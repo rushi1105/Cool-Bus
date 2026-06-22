@@ -10,7 +10,7 @@ import {
   onSnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, serverTimestamp } from './baseRepository';
+import { db, withMetadata } from './baseRepository';
 import type { AppNotification } from './types';
 
 export async function addNotification(data: {
@@ -24,16 +24,10 @@ export async function addNotification(data: {
   if (!data.userId || !data.type || !data.title || !data.message) {
     throw new Error('Validation failed: addNotification requires userId, type, title, message');
   }
-  const ref = await addDoc(collection(db, 'notifications'), {
-    userId: data.userId,
-    type: data.type,
-    title: data.title,
-    message: data.message,
-    read: data.read,
-    metadata: data.metadata ?? null,
-    timestamp: serverTimestamp(),
-    createdAt: serverTimestamp(),
-  });
+  const ref = await addDoc(
+    collection(db, 'notifications'),
+    withMetadata(data as Record<string, unknown>, ['userId', 'type', 'title', 'message']),
+  );
   return ref.id;
 }
 

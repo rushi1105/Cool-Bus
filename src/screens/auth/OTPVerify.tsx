@@ -67,7 +67,12 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const recaptchaRef = useRef<FirebaseRecaptchaHandle>(null);
+  const mountedRef = useRef(true);
   const [recaptchaReady, setRecaptchaReady] = useState(false);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -121,7 +126,7 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
         setConfirmationResult(fakeResult);
         setIsSendingOTP(false);
         setResendTimer(30);
-        setTimeout(() => inputRefs.current[0]?.focus(), 300);
+        setTimeout(() => { if (mountedRef.current) inputRefs.current[0]?.focus(); }, 300);
         return;
       }
       // ── END TEST BYPASS ──────────────────────────
@@ -143,7 +148,7 @@ export const OTPVerify: React.FC<OTPVerifyProps> = ({ navigation, route }) => {
       setConfirmationResult(fakeResult);
       setIsSendingOTP(false);
       setResendTimer(30);
-      setTimeout(() => inputRefs.current[0]?.focus(), 300);
+      setTimeout(() => { if (mountedRef.current) inputRefs.current[0]?.focus(); }, 300);
     } catch (err: any) {
       console.error('[OTPVerify] sendOTP error:', err);
       setIsSendingOTP(false);

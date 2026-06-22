@@ -10,7 +10,7 @@ import {
   serverTimestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db } from './baseRepository';
+import { db, withMetadata } from './baseRepository';
 import type { Trip, EntitySnapshot, RoutePoint } from './types';
 
 export async function getActiveTrip(busId: string): Promise<Trip | null> {
@@ -51,14 +51,15 @@ export async function startTrip(data: {
   if (!data.assignmentId || !data.busId || !data.driverId || !data.operatorId || !data.routeId) {
     throw new Error('Validation failed: startTrip requires assignmentId, busId, driverId, operatorId, routeId');
   }
-  const ref = await addDoc(collection(db, 'trips'), {
-    ...data,
-    status: 'ACTIVE',
-    routePoints: [],
-    startTime: serverTimestamp(),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  const ref = await addDoc(
+    collection(db, 'trips'),
+    withMetadata({
+      ...data,
+      status: 'ACTIVE',
+      routePoints: [],
+      startTime: serverTimestamp(),
+    } as Record<string, unknown>, ['assignmentId', 'busId', 'driverId', 'operatorId', 'routeId']),
+  );
   return ref.id;
 }
 

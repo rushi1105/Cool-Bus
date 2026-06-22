@@ -4,18 +4,15 @@ import Colors from '../../constants/colors';
 import { useAuth } from '../../hooks/useAuth';
 import { useDrivers } from '../../hooks/useDrivers';
 import { useAssignments } from '../../hooks/useAssignments';
+import { localTodayString } from '../../utils/date';
 
 interface DriverAttendanceProps { navigation: any }
-
-function todayString(): string {
-  return new Date().toISOString().split('T')[0];
-}
 
 export const DriverAttendance: React.FC<DriverAttendanceProps> = () => {
   const { profile } = useAuth();
   const operatorId = profile?.operatorId || null;
   const { drivers, loading: driversLoading } = useDrivers(operatorId);
-  const { assignments, loading: asgnLoading } = useAssignments(operatorId, todayString(), true);
+  const { assignments, loading: asgnLoading } = useAssignments(operatorId, localTodayString(), true);
 
   const todayAssignments = useMemo(() =>
     assignments.filter((a) => a.status !== 'CANCELLED'),

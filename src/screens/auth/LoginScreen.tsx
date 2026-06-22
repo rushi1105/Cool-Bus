@@ -6,7 +6,7 @@
  * Renders instantly to avoid native animations and keyboard autofocus race conditions.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -29,6 +29,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const handleSendOTP = async () => {
     setError('');
@@ -52,6 +57,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
 
       // Short simulated loading state to align with premium look-and-feel
       setTimeout(() => {
+        if (!mountedRef.current) return;
         setIsLoading(false);
         navigation.navigate('OTPVerify', {
           mode: 'login',

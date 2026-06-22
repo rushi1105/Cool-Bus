@@ -31,6 +31,7 @@ import { onActiveTripByAssignmentSnapshot } from '../../repositories/tripReposit
 import { useAuth } from '../../hooks/useAuth';
 import { useLocationManager } from '../../hooks/useLocationManager';
 import { calculateETA, getDistance } from '../../services/location';
+import { localTodayString } from '../../utils/date';
 import Colors from '../../constants/colors';
 
 interface ParentHomeProps {
@@ -168,7 +169,7 @@ export const ParentHome: React.FC<ParentHomeProps> = ({ navigation }) => {
   useEffect(() => {
     if (!student?.routeId || feeStatus === 'UNPAID') return;
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = localTodayString();
     let assignmentBusId: string | null = null;
     let assignmentDriverId: string | null = null;
     let assignmentId: string | null = null;

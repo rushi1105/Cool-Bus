@@ -7,15 +7,12 @@ import {
   query,
   where,
   writeBatch,
-  serverTimestamp,
   Timestamp,
   onSnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db } from './baseRepository';
-import { withMetadata } from './baseRepository';
+import { db, withMetadata } from './baseRepository';
 import type { User, Fee, Student } from './types';
-import { SCHEMA_VERSION } from './types';
 
 export async function getUserProfile(uid: string): Promise<User | null> {
   return getUserByUid(uid);
@@ -88,19 +85,16 @@ export async function registerDriver(
     const batch = writeBatch(db);
     const userRef = doc(db, 'users', uid);
 
-    batch.set(userRef, {
+    batch.set(userRef, withMetadata({
       name: data.name,
       phone: data.phone,
       email: '',
       role: 'driver',
       operatorId: data.operatorId,
       shift: data.shift,
-      schemaVersion: 3,
       isActive: true,
       availability: 'assigned',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    } as Record<string, unknown>));
 
     await batch.commit();
   } catch (err) {
@@ -139,17 +133,14 @@ export async function registerParent(
     }
 
     const userRef = doc(db, 'users', uid);
-    batch.set(userRef, {
+    batch.set(userRef, withMetadata({
       name: data.parentName,
       phone: data.phone,
       email: data.email,
       role: 'parent',
       operatorCode: data.operatorCode,
-      schemaVersion: 3,
       isActive: true,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    } as Record<string, unknown>));
 
     const studentCountQ = query(
       collection(db, 'students'),
@@ -159,7 +150,7 @@ export async function registerParent(
     const existingCount = existingCountSnap.size;
 
     const studentRef = doc(collection(db, 'students'));
-    batch.set(studentRef, {
+    batch.set(studentRef, withMetadata({
       name: data.childName,
       parentId: uid,
       operatorId,
@@ -168,10 +159,7 @@ export async function registerParent(
       grade: data.grade,
       gender: data.gender as 'Male' | 'Female' | 'Other',
       isActive: true,
-      schemaVersion: 3,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    } as Record<string, unknown>));
 
     const feeRef = doc(collection(db, 'fees'));
     const now = new Date();
@@ -179,7 +167,7 @@ export async function registerParent(
 
     if (existingCount === 0) {
       const trialExpiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-      batch.set(feeRef, {
+      batch.set(feeRef, withMetadata({
         parentId: uid,
         operatorId,
         studentId: studentRef.id,
@@ -188,12 +176,9 @@ export async function registerParent(
         total: 0,
         trialUsed: true,
         trialExpiry: Timestamp.fromDate(trialExpiry),
-        schemaVersion: 3,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      } as Record<string, unknown>));
     } else {
-      batch.set(feeRef, {
+      batch.set(feeRef, withMetadata({
         parentId: uid,
         operatorId,
         studentId: studentRef.id,
@@ -201,10 +186,7 @@ export async function registerParent(
         month: currentMonth,
         total: 2500,
         trialUsed: true,
-        schemaVersion: 3,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      } as Record<string, unknown>));
     }
 
     await batch.commit();

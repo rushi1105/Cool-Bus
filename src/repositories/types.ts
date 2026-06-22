@@ -24,7 +24,7 @@ export interface User {
 export interface Bus {
   id: string;
   operatorId: string;
-  driverId: string;
+  driverId?: string;
   busNumber: string;
   plateNumber?: string;
   defaultRouteId?: string;
@@ -34,6 +34,7 @@ export interface Bus {
   isActive: boolean;
   speed?: number;
   lastUpdated?: any;
+  schemaVersion?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -65,6 +66,7 @@ export interface Trip {
   driverSnapshot: EntitySnapshot;
   busSnapshot: EntitySnapshot;
   operatorSnapshot: EntitySnapshot;
+  schemaVersion?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -110,7 +112,9 @@ export interface Coupon {
   isUsed: boolean;
   usedBy?: string;
   usedAt?: any;
+  schemaVersion?: number;
   createdAt: Date;
+  updatedAt?: any;
   expiresAt: Date;
 }
 
@@ -124,6 +128,9 @@ export interface Operator {
   parentCount?: number;
   /** Operator's office/base location for map centering */
   officeLocation?: OfficeLocation;
+  schemaVersion?: number;
+  createdAt?: any;
+  updatedAt?: any;
 }
 
 export interface OfficeLocation {
@@ -139,6 +146,7 @@ export interface Route {
   stops: RouteStop[];
   version: number;
   isActive: boolean;
+  schemaVersion?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -161,7 +169,9 @@ export interface AppNotification {
   message?: string;
   read: boolean;
   timestamp: any;
+  schemaVersion?: number;
   createdAt?: any;
+  updatedAt?: any;
   metadata?: Record<string, unknown>;
 }
 
@@ -173,7 +183,9 @@ export interface Assignment {
   driverId: string;
   date: string;
   shift: 'Morning' | 'Evening' | 'Both';
+  direction?: 'pickup' | 'drop';
   status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  schemaVersion?: number;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -188,11 +200,12 @@ export interface StopChangeRequest {
   requestedStopId: string;
   reason?: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  schemaVersion?: number;
   createdAt: any;
   updatedAt: any;
 }
 
-export const SCHEMA_VERSION = 1;
+export { SCHEMA_VERSION } from '../constants/schema';
 
 // ─── Invite System ──────────────────────────────────────────────────
 
@@ -220,7 +233,9 @@ export interface InviteAcceptance {
   role: InviteRole;
   userId: string;
   userName?: string;
+  schemaVersion?: number;
   acceptedAt: any;
+  createdAt?: any;
 }
 
 // ─── Geocoding ──────────────────────────────────────────────────────

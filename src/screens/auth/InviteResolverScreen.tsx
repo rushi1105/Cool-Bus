@@ -52,7 +52,9 @@ export const InviteResolverScreen: React.FC<InviteResolverScreenProps> = ({ rout
     };
 
     // Small delay for smooth transition
-    setTimeout(verifyInvite, 800);
+    const timer = setTimeout(verifyInvite, 800);
+
+    return () => clearTimeout(timer);
   }, [code, navigation, fadeAnim]);
 
   return (

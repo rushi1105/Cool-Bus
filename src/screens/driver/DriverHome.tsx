@@ -27,7 +27,7 @@ import {
 } from '../../repositories/tripRepository';
 import { addNotification } from '../../repositories/notificationRepository';
 import { createAlert } from '../../repositories/alertRepository';
-import { getOperatorAssignmentsByDate } from '../../repositories/assignmentRepository';
+import { onOperatorAssignmentsSnapshot, updateAssignmentStatus } from '../../repositories/assignmentRepository';
 import {
   requestLocationPermissions,
   startGpsTracking,
@@ -42,12 +42,9 @@ import { haversineDistance } from '../../services/gps/distance';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocationManager } from '../../hooks/useLocationManager';
 import { useTabBarSafeBottom } from '../../hooks/useTabBarSafeBottom';
+import { localTodayString } from '../../utils/date';
 import Colors from '../../constants/colors';
 import type { Assignment, Route as RouteType, OfficeLocation } from '../../repositories/types';
-
-function todayString(): string {
-  return new Date().toISOString().split('T')[0];
-}
 
 export const DriverHome: React.FC = () => {
   const { user, profile } = useAuth();
@@ -87,43 +84,65 @@ export const DriverHome: React.FC = () => {
   const visitedStopsRef = useRef<number[]>([]);
   const routePointsRef = useRef<GpsPoint[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const locationSubscriptionRef = useRef<any>(null);
 
-  // Load today's assignment on mount
+  // Clean up GPS subscription on unmount
   useEffect(() => {
-    const loadAssignment = async () => {
-      if (!profile?.operatorId || !user?.uid) {
-        setLoadingAssignment(false);
-        return;
-      }
-      try {
-        const asgns = await getOperatorAssignmentsByDate(profile.operatorId, todayString());
-        const myAsgn = asgns.find(
-          (a) => a.driverId === user.uid && (a.status === 'SCHEDULED' || a.status === 'IN_PROGRESS'),
-        );
-        setAssignment(myAsgn || null);
-
-        if (myAsgn) {
-          const route = await getRoute(myAsgn.routeId);
-          setRouteData(route || null);
-        }
-      } catch (err) {
-        console.error('[DriverHome] Load assignment error:', err);
-      } finally {
-        setLoadingAssignment(false);
+    return () => {
+      if (locationSubscriptionRef.current) {
+        locationSubscriptionRef.current.remove();
+        locationSubscriptionRef.current = null;
       }
     };
-    loadAssignment();
+  }, []);
+
+  // Listen to today's assignments in realtime
+  useEffect(() => {
+    if (!profile?.operatorId || !user?.uid) {
+      setLoadingAssignment(false);
+      return;
+    }
+
+    setLoadingAssignment(true);
+
+    const unsubscribe = onOperatorAssignmentsSnapshot(
+      profile.operatorId,
+      localTodayString(),
+      async (asgns) => {
+        try {
+          const myAsgn = asgns.find(
+            (a) => a.driverId === user?.uid && (a.status === 'SCHEDULED' || a.status === 'IN_PROGRESS'),
+          );
+
+          setAssignment(myAsgn || null);
+
+          if (myAsgn) {
+            const route = await getRoute(myAsgn.routeId);
+            setRouteData(route || null);
+          } else {
+            setRouteData(null);
+          }
+        } catch (err) {
+          console.error('[DriverHome] Assignment snapshot processing error:', err);
+        } finally {
+          setLoadingAssignment(false);
+        }
+      },
+      (err) => {
+        console.error('[DriverHome] Assignment listener error:', err);
+        setLoadingAssignment(false);
+      }
+    );
+
+    return () => unsubscribe();
   }, [profile?.operatorId, user?.uid]);
 
   // Resume from active trip if assignment is IN_PROGRESS
   useEffect(() => {
-    if (!assignment || assignment.status !== 'IN_PROGRESS' || !profile?.busId) return;
+    if (!assignment || assignment.status !== 'IN_PROGRESS') return;
 
-    const busId = profile.busId;
+    const busId = assignment.busId;
     const loadActiveState = async () => {
-      const busData = await getBus(busId);
-      if (!busData) return;
-
       const route = routeData;
       if (route) {
         const sorted = route.stops.map((s, i) => ({ ...s, order: i }));
@@ -140,7 +159,7 @@ export const DriverHome: React.FC = () => {
       busStudentsRef.current = students;
     };
     loadActiveState();
-  }, [assignment, routeData, profile?.busId]);
+  }, [assignment, routeData]);
 
   // Seed currentLocation from hook if GPS is available
   useEffect(() => {
@@ -220,8 +239,8 @@ export const DriverHome: React.FC = () => {
 
   const checkProximity = useCallback(
     (latitude: number, longitude: number) => {
-      const busId = profile?.busId;
-      if (!busId) return;
+      if (!assignment) return;
+      const busId = assignment.busId;
 
       setVisitedStops((currentVisited) => {
         let updatedVisited = [...currentVisited];
@@ -281,7 +300,7 @@ export const DriverHome: React.FC = () => {
         return currentVisited;
       });
     },
-    [profile?.busId],
+    [assignment],
   );
 
   const startTrip = useCallback(async () => {
@@ -299,12 +318,7 @@ export const DriverHome: React.FC = () => {
         return;
       }
 
-      const busId = profile?.busId;
-      if (!busId) {
-        Alert.alert('Error', 'No bus assigned. Contact your operator.');
-        Animated.spring(thumbX, { toValue: 0, useNativeDriver: false }).start();
-        return;
-      }
+      const busId = assignment.busId;
 
       const route = routeData;
       if (!route) {
@@ -355,10 +369,12 @@ export const DriverHome: React.FC = () => {
 
       setTripId(tripIdResult);
 
-      // Shim: write legacy fields
+      // Transition assignment status: SCHEDULED → IN_PROGRESS
+      await updateAssignmentStatus(assignment.id, 'IN_PROGRESS');
+
+      // Mark bus active for parent live tracking
       await updateBus(busId, {
         isActive: true,
-        driverId: user?.uid || '',
         visitedStops: [],
         allStopsVisited: false,
       });
@@ -373,7 +389,7 @@ export const DriverHome: React.FC = () => {
             accuracy: point.accuracy,
           });
 
-          // Shim: keep currentLocation on bus
+          // Keep currentLocation on bus for parent live tracking
           updateBus(busId, {
             currentLocation: { latitude: point.latitude, longitude: point.longitude },
             speed: point.speed,
@@ -387,6 +403,7 @@ export const DriverHome: React.FC = () => {
         },
         () => {},
       );
+      locationSubscriptionRef.current = subscription;
       setLocationSubscription(subscription);
 
       setTripActive(true);
@@ -411,11 +428,10 @@ export const DriverHome: React.FC = () => {
   }, [assignment, routeData, profile, user, checkProximity]);
 
   const endTrip = useCallback(async () => {
-    const busId = profile?.busId || `bus-${user?.uid}`;
-
     try {
-      if (locationSubscription) {
-        await locationSubscription.remove();
+      if (locationSubscriptionRef.current) {
+        await locationSubscriptionRef.current.remove();
+        locationSubscriptionRef.current = null;
         setLocationSubscription(null);
       }
 
@@ -450,6 +466,18 @@ export const DriverHome: React.FC = () => {
         }
       });
 
+      // Transition assignment status: IN_PROGRESS → COMPLETED
+      if (assignment) {
+        await updateAssignmentStatus(assignment.id, 'COMPLETED');
+
+        // Mark bus inactive
+        await updateBus(assignment.busId, {
+          isActive: false,
+          visitedStops: [],
+          allStopsVisited: false,
+        });
+      }
+
       setTripActive(false);
       setTripStartTime(null);
       setTripId('');
@@ -461,17 +489,10 @@ export const DriverHome: React.FC = () => {
       stopsRef.current = [];
       visitedStopsRef.current = [];
       busStudentsRef.current = [];
-
-      // Shim: update bus
-      await updateBus(busId, {
-        isActive: false,
-        visitedStops: [],
-        allStopsVisited: false,
-      });
     } catch (err) {
       console.error('[DriverHome] endTrip error:', err);
     }
-  }, [tripId, locationSubscription, profile?.busId, user?.uid]);
+  }, [tripId, locationSubscription, assignment]);
 
   const handleSOS = useCallback(() => {
     Alert.alert('Send SOS Alert?', 'This will notify your operator immediately.', [
@@ -483,7 +504,8 @@ export const DriverHome: React.FC = () => {
           try {
             await createAlert({
               driverId: user?.uid,
-              busId: profile?.busId || '',
+              busId: assignment?.busId || '',
+              operatorId: profile?.operatorId ?? '',
               location: currentLocation
                 ? { latitude: currentLocation.latitude, longitude: currentLocation.longitude }
                 : null,
@@ -496,7 +518,7 @@ export const DriverHome: React.FC = () => {
         },
       },
     ]);
-  }, [currentLocation, profile?.busId, user?.uid]);
+  }, [currentLocation, assignment, user?.uid]);
 
   const panResponder = useMemo(() => {
     return PanResponder.create({

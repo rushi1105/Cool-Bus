@@ -1,6 +1,6 @@
 import { serverTimestamp, Timestamp } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { SCHEMA_VERSION } from './types';
+import { SCHEMA_VERSION } from '../constants/schema';
 
 export { db, serverTimestamp, Timestamp };
 export { SCHEMA_VERSION };

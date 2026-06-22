@@ -294,7 +294,8 @@ service cloud.firestore {
       allow create: if request.auth != null
                     && request.resource.data.keys().hasAll([
                       'userId', 'type', 'title', 'message',
-                      'read', 'timestamp', 'createdAt',
+                      'read', 'timestamp', 'schemaVersion',
+                      'createdAt', 'updatedAt',
                     ]);
 
       allow read: if request.auth != null
@@ -328,6 +329,42 @@ service cloud.firestore {
                     ]);
 
       allow delete: if false;
+    }
+
+    // ─────────────────────────────────────────────
+    // INVITE ACCEPTANCES — track who accepted invites
+    // ─────────────────────────────────────────────
+    match /invite_acceptances/{acceptanceId} {
+
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasAll([
+                      'inviteId', 'operatorId', 'role', 'userId',
+                      'schemaVersion', 'acceptedAt',
+                    ]);
+
+      allow read: if request.auth != null
+                  && (resource.data.userId == request.auth.uid
+                      || resource.data.operatorId == getOperatorId());
+
+      allow update, delete: if false;
+    }
+
+    // ─────────────────────────────────────────────
+    // ALERTS — SOS and emergency alerts from drivers
+    // ─────────────────────────────────────────────
+    match /alerts/{alertId} {
+
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasAll([
+                      'driverId', 'busId', 'operatorId', 'status',
+                      'location', 'schemaVersion', 'createdAt', 'updatedAt',
+                    ]);
+
+      allow read: if request.auth != null
+                  && (request.auth.uid == resource.data.driverId
+                      || resource.data.operatorId == getOperatorId());
+
+      allow update, delete: if false;
     }
   }
 }

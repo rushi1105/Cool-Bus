@@ -1,3 +1,13 @@
+/**
+ * @deprecated Use coolbus_seed_script_v4.js instead.
+ *
+ * v3 is retained for reference but has known alignment issues:
+ * - Assignment status uses "assigned" vocabulary instead of "SCHEDULED"
+ * - Trip status uses lowercase "completed" instead of "COMPLETED"
+ * - Missing alerts, notifications, coupons, requests, invites collections
+ * - Bus.driverId field not aligned with schema
+ */
+
 const { initializeApp } = require('firebase/app');
 const { getFirestore, collection, doc, setDoc, writeBatch, serverTimestamp, Timestamp } = require('firebase/firestore');
 

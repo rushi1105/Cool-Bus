@@ -54,7 +54,6 @@ export const BusManager: React.FC<BusManagerProps> = ({ navigation, route }) => 
 
       await createBus({
         operatorId,
-        driverId: '',
         busNumber: busNumber.trim(),
         plateNumber: plateNumber.trim() || undefined,
         capacity: capacity ? parseInt(capacity, 10) : undefined,
